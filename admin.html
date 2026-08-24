@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Admin | Class Calendar</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Special+Elite&display=swap">
+<link rel="stylesheet" href="assets/style.css">
+<link rel="icon" href="assets/logo.png">
+<style>
+  .synced-badge {
+    display: inline-block;
+    font-size: 0.68rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    padding: 2px 8px;
+    border-radius: 999px;
+    border: 1px solid var(--black);
+    color: var(--white);
+    background: var(--black);
+    margin-left: 6px;
+  }
+  .friday-row { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--gray-200); }
+  .friday-row:last-child { border-bottom: none; }
+  .friday-row .date { font-weight: 600; flex: 1; }
+</style>
+</head>
+<body>
+
+<header class="site-header">
+  <div class="header-inner">
+    <a href="index.html" class="brand">
+      <img src="assets/logo.png" alt="Social Circle High School logo" class="school-logo">
+      <span class="brand-text">
+        <p class="brand-eyebrow">SCHS Computer Science</p>
+        <h1 class="brand-title">Class Calendar &mdash; Admin</h1>
+      </span>
+    </a>
+    <div class="header-actions">
+      <a class="btn btn-ghost" href="index.html">Public Calendar</a>
+    </div>
+  </div>
+</header>
+
+<main>
+
+  <div id="pin-gate" class="pin-gate">
+    <div class="card">
+      <h2 style="margin-top:0;">Enter Admin PIN</h2>
+      <div id="pin-alert"></div>
+      <form class="stack" id="pin-form">
+        <div class="field">
+          <label for="pin-input">PIN</label>
+          <input type="password" id="pin-input" inputmode="numeric" autocomplete="off" required>
+        </div>
+        <button type="submit" class="btn btn-primary">Unlock</button>
+      </form>
+    </div>
+  </div>
+
+  <div id="admin-content" style="display:none;">
+
+    <h2 style="margin-bottom:4px;">Friday A/B Days</h2>
+    <p class="hint" style="margin-top:0;">Fridays alternate between the A-day and B-day schedule, and don't follow a fixed formula (holidays shift things) &mdash; set each one here before adding events that land on a Friday.</p>
+    <div class="card">
+      <form class="field-row" id="friday-form" style="align-items:flex-end;">
+        <div class="field">
+          <label for="friday-date">Friday's date</label>
+          <input type="date" id="friday-date" required>
+        </div>
+        <div class="field">
+          <label for="friday-type">Day type</label>
+          <select id="friday-type">
+            <option value="A">A day</option>
+            <option value="B">B day</option>
+          </select>
+        </div>
+        <button type="submit" class="btn btn-primary">Save</button>
+      </form>
+      <div id="friday-alert"></div>
+      <div id="friday-list" style="margin-top:14px;"></div>
+    </div>
+
+    <h2 style="margin-bottom:4px;">Add an Event</h2>
+    <p class="hint" style="margin-top:0;">1A auto-copies to 2B (and back), and 3A/4A auto-copy to each other <em>and</em> forward to 3B's next class &mdash; you'll see a confirmation showing exactly what got added. 4B (EC) has no sync partner.</p>
+    <div class="card">
+      <form class="stack" id="event-form">
+        <div class="field-row">
+          <div class="field">
+            <label for="event-slot">Period</label>
+            <select id="event-slot" required></select>
+          </div>
+          <div class="field">
+            <label for="event-date">Date</label>
+            <input type="date" id="event-date" required>
+          </div>
+          <div class="field">
+            <label for="event-type">Type</label>
+            <select id="event-type">
+              <option value="assignment">Assignment</option>
+              <option value="quiz">Quiz</option>
+              <option value="test">Test</option>
+            </select>
+          </div>
+        </div>
+        <div class="field">
+          <label for="event-title">Title</label>
+          <input type="text" id="event-title" required placeholder="e.g. 1.2 CIA Triad Quiz">
+        </div>
+        <div class="field">
+          <label for="event-notes">Notes (optional)</label>
+          <textarea id="event-notes" rows="2"></textarea>
+        </div>
+        <button type="submit" class="btn btn-primary" style="align-self:flex-start;">Add Event</button>
+      </form>
+      <div id="event-alert"></div>
+    </div>
+
+    <h2 style="margin-bottom:4px;">All Events</h2>
+    <p class="hint" style="margin-top:0;">Events with the same <span class="synced-badge">synced</span> tag share a link &mdash; editing or deleting one updates all of them.</p>
+    <div class="card">
+      <div id="events-table"></div>
+    </div>
+
+  </div>
+</main>
+
+<footer class="site-footer">
+  Social Circle High School &middot; Computer Science &middot; questions? see Mr. Norman
+</footer>
+
+<script src="assets/api.js"></script>
+<script>
+function escapeHtml(str) {
+  const div = document.createElement('div');
+  div.textContent = str == null ? '' : String(str);
+  return div.innerHTML;
+}
+
+const PIN_KEY = 'classCalendarPin';
+function getPin() { return sessionStorage.getItem(PIN_KEY) || ''; }
+
+function setAlert(el, kind, msg) {
+  el.innerHTML = msg ? `<div class="alert alert-${kind}">${escapeHtml(msg)}</div>` : '';
+}
+
+const pinGate = document.getElementById('pin-gate');
+const adminContent = document.getElementById('admin-content');
+const pinForm = document.getElementById('pin-form');
+const pinAlert = document.getElementById('pin-alert');
+
+let SLOTS = [];
+let SYNC_RULES = [];
+
+pinForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const pin = document.getElementById('pin-input').value.trim();
+  setAlert(pinAlert, 'info', 'Checking…');
+  try {
+    const res = await apiPost({ action: 'verifyPin', pin });
+    if (res.ok) {
+      sessionStorage.setItem(PIN_KEY, pin);
+      pinAlert.innerHTML = '';
+      showAdmin();
+    } else {
+      setAlert(pinAlert, 'error', res.error || 'Incorrect PIN.');
+    }
+  } catch (err) {
+    setAlert(pinAlert, 'error', 'Could not reach the server. This page needs to be running on Netlify (with functions deployed) to work.');
+  }
+});
+
+async function apiPostAuthed(payload) {
+  const res = await apiPost(Object.assign({}, payload, { pin: getPin() }));
+  if (res.error === 'Invalid PIN') {
+    sessionStorage.removeItem(PIN_KEY);
+    adminContent.style.display = 'none';
+    pinGate.style.display = 'block';
+    setAlert(pinAlert, 'error', 'Your session expired. Please re-enter the PIN.');
+  }
+  return res;
+}
+
+function showAdmin() {
+  pinGate.style.display = 'none';
+  adminContent.style.display = 'block';
+  init();
+}
+
+async function init() {
+  const slotsRes = await apiPostAuthed({ action: 'adminEvents' });
+  if (slotsRes.error) return;
+  SLOTS = slotsRes.slots;
+  SYNC_RULES = slotsRes.syncRules;
+
+  const slotSelect = document.getElementById('event-slot');
+  SLOTS.forEach(s => {
+    const opt = document.createElement('option');
+    opt.value = s.id;
+    opt.textContent = `${s.label} (${s.dayType}-day)`;
+    slotSelect.appendChild(opt);
+  });
+
+  renderEventsTable(slotsRes.events);
+  loadFridayTypes();
+}
+
+function slotLabel(id) {
+  const s = SLOTS.find(x => x.id === id);
+  return s ? `${s.label} (${s.dayType}-day)` : id;
+}
+
+function formatDate(dateStr) {
+  const [y, m, d] = dateStr.split('-').map(Number);
+  const dt = new Date(y, m - 1, d);
+  return dt.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
+}
+
+function renderEventsTable(events) {
+  const el = document.getElementById('events-table');
+  if (events.length === 0) {
+    el.innerHTML = '<div class="empty-state">No events yet.</div>';
+    return;
+  }
+  el.innerHTML = `
+    <table class="roster">
+      <thead><tr><th>Date</th><th>Period</th><th>Type</th><th>Title</th><th>Notes</th><th></th></tr></thead>
+      <tbody>
+        ${events.map(e => {
+          const linkCount = events.filter(x => x.linkId === e.linkId).length;
+          return `
+            <tr>
+              <td>${formatDate(e.date)}</td>
+              <td>${escapeHtml(slotLabel(e.slotId))}</td>
+              <td>${escapeHtml(e.type)}</td>
+              <td>${escapeHtml(e.title)}${linkCount > 1 ? '<span class="synced-badge">synced</span>' : ''}</td>
+              <td>${e.notes ? escapeHtml(e.notes) : ''}</td>
+              <td class="row-actions">
+                <button class="btn btn-sm" data-edit="${e.id}">Edit</button>
+                <button class="btn btn-sm btn-danger" data-delete="${e.id}">Delete</button>
+              </td>
+            </tr>`;
+        }).join('')}
+      </tbody>
+    </table>
+  `;
+
+  el.querySelectorAll('[data-delete]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      if (!confirm('Delete this event? If it\'s synced, its linked copy will be deleted too.')) return;
+      await apiPostAuthed({ action: 'deleteEvent', id: btn.dataset.delete });
+      refreshEvents();
+    });
+  });
+  el.querySelectorAll('[data-edit]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const ev = events.find(x => x.id === btn.dataset.edit);
+      const title = prompt('Title', ev.title);
+      if (title === null) return;
+      const notes = prompt('Notes', ev.notes || '');
+      if (notes === null) return;
+      await apiPostAuthed({ action: 'editEvent', id: ev.id, title, notes });
+      refreshEvents();
+    });
+  });
+}
+
+async function refreshEvents() {
+  const res = await apiPostAuthed({ action: 'adminEvents' });
+  if (!res.error) renderEventsTable(res.events);
+}
+
+document.getElementById('event-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const slotId = document.getElementById('event-slot').value;
+  const date = document.getElementById('event-date').value;
+  const type = document.getElementById('event-type').value;
+  const title = document.getElementById('event-title').value.trim();
+  const notes = document.getElementById('event-notes').value.trim();
+  const alertEl = document.getElementById('event-alert');
+  setAlert(alertEl, 'info', 'Saving…');
+
+  const res = await apiPostAuthed({ action: 'addEvent', slotId, date, type, title, notes });
+  if (res.error) {
+    setAlert(alertEl, 'error', res.error);
+    return;
+  }
+
+  const extra = res.created.length > 1
+    ? ` Also added to: ${res.created.slice(1).map(c => `${slotLabel(c.slotId)} on ${formatDate(c.date)}`).join(', ')}.`
+    : '';
+  setAlert(alertEl, 'success', `Added.${extra}`);
+  document.getElementById('event-title').value = '';
+  document.getElementById('event-notes').value = '';
+  refreshEvents();
+});
+
+async function loadFridayTypes() {
+  const res = await apiGet('fridayTypes');
+  renderFridayList(res.fridayTypes || {});
+}
+
+function renderFridayList(types) {
+  const el = document.getElementById('friday-list');
+  const dates = Object.keys(types).sort();
+  if (dates.length === 0) {
+    el.innerHTML = '<p class="hint">No Fridays set yet.</p>';
+    return;
+  }
+  el.innerHTML = dates.map(d => `
+    <div class="friday-row">
+      <span class="date">${formatDate(d)}</span>
+      <span class="badge${types[d] === 'A' ? ' on-site' : ''}">${types[d]} day</span>
+    </div>
+  `).join('');
+}
+
+document.getElementById('friday-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const date = document.getElementById('friday-date').value;
+  const type = document.getElementById('friday-type').value;
+  const alertEl = document.getElementById('friday-alert');
+  setAlert(alertEl, 'info', 'Saving…');
+  const res = await apiPostAuthed({ action: 'setFridayType', date, type });
+  if (res.error) {
+    setAlert(alertEl, 'error', res.error);
+    return;
+  }
+  setAlert(alertEl, 'success', 'Saved.');
+  loadFridayTypes();
+});
+
+if (getPin()) {
+  apiPostAuthed({ action: 'verifyPin' }).then(res => {
+    if (res.ok) showAdmin();
+  });
+}
+</script>
+</body>
+</html>

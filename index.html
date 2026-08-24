@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Class Calendar</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Special+Elite&display=swap">
+<link rel="stylesheet" href="assets/style.css">
+<link rel="icon" href="assets/logo.png">
+</head>
+<body>
+
+<header class="site-header">
+  <div class="header-inner">
+    <a href="index.html" class="brand">
+      <img src="assets/logo.png" alt="Social Circle High School logo" class="school-logo">
+      <span class="brand-text">
+        <p class="brand-eyebrow">SCHS Computer Science</p>
+        <h1 class="brand-title">Class Calendar</h1>
+      </span>
+    </a>
+    <div class="header-actions">
+      <a class="btn btn-ghost" href="admin.html">Teacher Admin</a>
+    </div>
+  </div>
+</header>
+
+<main>
+  <div class="hero">
+    <h2>Find your class period</h2>
+    <p>Pick your period below to see upcoming quizzes, tests, and assignments for that class.</p>
+  </div>
+
+  <div class="card">
+    <div class="field">
+      <label for="slot-select">My period</label>
+      <select id="slot-select">
+        <option value="">Choose a period&hellip;</option>
+      </select>
+    </div>
+  </div>
+
+  <div id="result"></div>
+</main>
+
+<footer class="site-footer">
+  Social Circle High School &middot; Computer Science &middot; questions? see Mr. Norman
+</footer>
+
+<script src="assets/api.js"></script>
+<script>
+function escapeHtml(str) {
+  const div = document.createElement('div');
+  div.textContent = str == null ? '' : String(str);
+  return div.innerHTML;
+}
+
+const TYPE_LABEL = { quiz: 'Quiz', test: 'Test', assignment: 'Assignment' };
+
+function formatDate(dateStr) {
+  const [y, m, d] = dateStr.split('-').map(Number);
+  const dt = new Date(y, m - 1, d);
+  return dt.toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' });
+}
+
+const slotSelect = document.getElementById('slot-select');
+const resultEl = document.getElementById('result');
+
+async function loadSlots() {
+  const res = await apiGet('slots');
+  (res.slots || []).forEach(s => {
+    const opt = document.createElement('option');
+    opt.value = s.id;
+    opt.textContent = `${s.label} (${s.dayType}-day)`;
+    slotSelect.appendChild(opt);
+  });
+  const saved = sessionStorage.getItem('calendarSlot');
+  if (saved) {
+    slotSelect.value = saved;
+    loadEvents(saved);
+  }
+}
+
+async function loadEvents(slotId) {
+  if (!slotId) { resultEl.innerHTML = ''; return; }
+  sessionStorage.setItem('calendarSlot', slotId);
+  resultEl.innerHTML = '<div class="loading">Loading&hellip;</div>';
+  try {
+    const res = await apiGet('publicEvents', { slot: slotId });
+    if (res.error) {
+      resultEl.innerHTML = `<div class="alert alert-error">${escapeHtml(res.error)}</div>`;
+      return;
+    }
+    if (res.events.length === 0) {
+      resultEl.innerHTML = `<div class="card empty-state">Nothing on the calendar yet for ${escapeHtml(res.slot.label)}.</div>`;
+      return;
+    }
+    resultEl.innerHTML = `
+      <h2 style="margin-bottom:4px;">${escapeHtml(res.slot.label)}</h2>
+      <div class="card">
+        <table class="roster">
+          <thead><tr><th>Date</th><th>Type</th><th>Title</th><th>Notes</th></tr></thead>
+          <tbody>
+            ${res.events.map(e => `
+              <tr>
+                <td>${formatDate(e.date)}</td>
+                <td>${escapeHtml(TYPE_LABEL[e.type] || 'Assignment')}</td>
+                <td>${escapeHtml(e.title)}</td>
+                <td>${e.notes ? escapeHtml(e.notes) : '<span class="hint" style="margin:0;">&mdash;</span>'}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+    `;
+  } catch (err) {
+    resultEl.innerHTML = '<div class="alert alert-error">Could not reach the server. This page needs to be running on Netlify (with functions deployed) to work.</div>';
+  }
+}
+
+slotSelect.addEventListener('change', () => loadEvents(slotSelect.value));
+loadSlots();
+</script>
+</body>
+</html>
