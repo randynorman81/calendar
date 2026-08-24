@@ -154,6 +154,12 @@ const pinAlert = document.getElementById('pin-alert');
 
 let SLOTS = [];
 let SYNC_RULES = [];
+// Kept in sync locally after every mutation instead of re-fetched from the
+// server, since a read fired immediately after a write can briefly show
+// stale data (Netlify Blobs' global replication has a short lag) even
+// though the write itself already landed safely.
+let currentEvents = [];
+let currentFridayTypes = {};
 
 pinForm.addEventListener('submit', async (e) => {
   e.preventDefault();
@@ -204,8 +210,12 @@ async function init() {
     slotSelect.appendChild(opt);
   });
 
-  renderEventsTable(slotsRes.events);
-  loadFridayTypes();
+  currentEvents = slotsRes.events;
+  renderEventsTable();
+
+  const fridayRes = await apiGet('fridayTypes');
+  currentFridayTypes = fridayRes.fridayTypes || {};
+  renderFridayList();
 }
 
 function slotLabel(id) {
@@ -219,9 +229,9 @@ function formatDate(dateStr) {
   return dt.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
 }
 
-function renderEventsTable(events) {
+function renderEventsTable() {
   const el = document.getElementById('events-table');
-  if (events.length === 0) {
+  if (currentEvents.length === 0) {
     el.innerHTML = '<div class="empty-state">No events yet.</div>';
     return;
   }
@@ -229,8 +239,8 @@ function renderEventsTable(events) {
     <table class="roster">
       <thead><tr><th>Date</th><th>Period</th><th>Type</th><th>Title</th><th>Notes</th><th></th></tr></thead>
       <tbody>
-        ${events.map(e => {
-          const linkCount = events.filter(x => x.linkId === e.linkId).length;
+        ${currentEvents.map(e => {
+          const linkCount = currentEvents.filter(x => x.linkId === e.linkId).length;
           return `
             <tr>
               <td>${formatDate(e.date)}</td>
@@ -251,26 +261,28 @@ function renderEventsTable(events) {
   el.querySelectorAll('[data-delete]').forEach(btn => {
     btn.addEventListener('click', async () => {
       if (!confirm('Delete this event? If it\'s synced, its linked copy will be deleted too.')) return;
-      await apiPostAuthed({ action: 'deleteEvent', id: btn.dataset.delete });
-      refreshEvents();
+      const target = currentEvents.find(x => x.id === btn.dataset.delete);
+      const res = await apiPostAuthed({ action: 'deleteEvent', id: btn.dataset.delete });
+      if (res.error) { alert(res.error); return; }
+      currentEvents = currentEvents.filter(e => e.linkId !== target.linkId);
+      renderEventsTable();
     });
   });
   el.querySelectorAll('[data-edit]').forEach(btn => {
     btn.addEventListener('click', async () => {
-      const ev = events.find(x => x.id === btn.dataset.edit);
+      const ev = currentEvents.find(x => x.id === btn.dataset.edit);
       const title = prompt('Title', ev.title);
       if (title === null) return;
       const notes = prompt('Notes', ev.notes || '');
       if (notes === null) return;
-      await apiPostAuthed({ action: 'editEvent', id: ev.id, title, notes });
-      refreshEvents();
+      const res = await apiPostAuthed({ action: 'editEvent', id: ev.id, title, notes });
+      if (res.error) { alert(res.error); return; }
+      currentEvents.forEach(e => {
+        if (e.linkId === ev.linkId) { e.title = title; e.notes = notes; }
+      });
+      renderEventsTable();
     });
   });
-}
-
-async function refreshEvents() {
-  const res = await apiPostAuthed({ action: 'adminEvents' });
-  if (!res.error) renderEventsTable(res.events);
 }
 
 document.getElementById('event-form').addEventListener('submit', async (e) => {
@@ -295,17 +307,13 @@ document.getElementById('event-form').addEventListener('submit', async (e) => {
   setAlert(alertEl, 'success', `Added.${extra}`);
   document.getElementById('event-title').value = '';
   document.getElementById('event-notes').value = '';
-  refreshEvents();
+  currentEvents = currentEvents.concat(res.created);
+  renderEventsTable();
 });
 
-async function loadFridayTypes() {
-  const res = await apiGet('fridayTypes');
-  renderFridayList(res.fridayTypes || {});
-}
-
-function renderFridayList(types) {
+function renderFridayList() {
   const el = document.getElementById('friday-list');
-  const dates = Object.keys(types).sort();
+  const dates = Object.keys(currentFridayTypes).sort();
   if (dates.length === 0) {
     el.innerHTML = '<p class="hint">No Fridays set yet.</p>';
     return;
@@ -313,7 +321,7 @@ function renderFridayList(types) {
   el.innerHTML = dates.map(d => `
     <div class="friday-row">
       <span class="date">${formatDate(d)}</span>
-      <span class="badge${types[d] === 'A' ? ' on-site' : ''}">${types[d]} day</span>
+      <span class="badge${currentFridayTypes[d] === 'A' ? ' on-site' : ''}">${currentFridayTypes[d]} day</span>
     </div>
   `).join('');
 }
@@ -330,7 +338,8 @@ document.getElementById('friday-form').addEventListener('submit', async (e) => {
     return;
   }
   setAlert(alertEl, 'success', 'Saved.');
-  loadFridayTypes();
+  currentFridayTypes[date] = type;
+  renderFridayList();
 });
 
 if (getPin()) {

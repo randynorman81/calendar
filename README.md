@@ -43,6 +43,16 @@ a `linkId` behind the scenes), so they can't drift out of sync.
 **To change the schedule or sync rules:** edit the `SLOTS` and `SYNC_RULES`
 arrays at the top of `netlify/functions/data.js`.
 
+## A note on read timing
+
+Right after adding/editing/deleting an event, a page that immediately
+re-fetches the list can occasionally show the old data for a couple
+seconds before catching up (Netlify Blobs' global replication has a brief
+lag). Writes themselves are safe -- two people saving at the same instant
+won't clobber each other's data -- it's only that a read fired *immediately*
+after a write can be momentarily stale. Refreshing a few seconds later
+always shows the correct result.
+
 ## Holidays
 
 `netlify/functions/data.js` has a `HOLIDAYS` list (pulled from the official

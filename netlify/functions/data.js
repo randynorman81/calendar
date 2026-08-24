@@ -138,11 +138,9 @@ async function publicEvents(slotId) {
   return { ok: true, slot: { id: slot.id, label: slot.label, course: slot.course }, events: forSlot };
 }
 
-const BUILD_TAG = "etag-fix-1";
-
 async function adminEvents() {
   const events = await readJSON("events", []);
-  return { ok: true, buildTag: BUILD_TAG, slots: SLOTS, syncRules: SYNC_RULES, events: events.sort((a, b) => a.date.localeCompare(b.date)) };
+  return { ok: true, slots: SLOTS, syncRules: SYNC_RULES, events: events.sort((a, b) => a.date.localeCompare(b.date)) };
 }
 
 async function addEvent(body) {
