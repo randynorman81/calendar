@@ -105,8 +105,22 @@ async function readJSON(key, fallback) {
   return val || fallback;
 }
 
-async function writeJSON(key, val) {
-  await store().setJSON(key, val);
+// Read-modify-write with an ETag conditional write, retrying on conflict.
+// Two admin requests landing at the same moment (or two synced writes from
+// one addEvent call in quick succession) would otherwise race: both read
+// the same starting array, and whichever write finishes last silently wipes
+// out the other's change. This makes that impossible -- a write only lands
+// if nothing else changed the key since we read it.
+async function updateJSON(key, fallback, updater) {
+  for (let attempt = 0; attempt < 8; attempt++) {
+    const existing = await store().getWithMetadata(key, { type: "json" });
+    const current = existing ? existing.data : fallback;
+    const updated = updater(current == null ? fallback : current);
+    const writeOpts = existing ? { onlyIfMatch: existing.etag } : { onlyIfNew: true };
+    const result = await store().setJSON(key, updated, writeOpts);
+    if (result.modified) return updated;
+  }
+  throw new Error(`Too much contention writing "${key}" -- try again`);
 }
 
 function newId() {
@@ -149,25 +163,28 @@ async function addEvent(body) {
     return { error: `${slot.label} (${slot.dayType}-day) doesn't meet on ${wd}s.` };
   }
 
-  const events = await readJSON("events", []);
-  const linkId = newId();
-  const created = [];
+  let created = [];
+  await updateJSON("events", [], (events) => {
+    created = [];
+    const linkId = newId();
 
-  const primary = { id: newId(), slotId, date, title, notes, type, linkId, timestamp: new Date().toISOString() };
-  events.push(primary);
-  created.push(primary);
+    const primary = { id: newId(), slotId, date, title, notes, type, linkId, timestamp: new Date().toISOString() };
+    events.push(primary);
+    created.push(primary);
 
-  for (const rule of syncRulesFrom(slotId)) {
-    const partnerSlot = slotById(rule.to);
-    const partnerDate = rule.mode === "same-day" ? date : nextMeetingDate(partnerSlot, date, fridayTypes);
-    if (partnerDate) {
-      const mirrored = { id: newId(), slotId: rule.to, date: partnerDate, title, notes, type, linkId, timestamp: new Date().toISOString() };
-      events.push(mirrored);
-      created.push(mirrored);
+    for (const rule of syncRulesFrom(slotId)) {
+      const partnerSlot = slotById(rule.to);
+      const partnerDate = rule.mode === "same-day" ? date : nextMeetingDate(partnerSlot, date, fridayTypes);
+      if (partnerDate) {
+        const mirrored = { id: newId(), slotId: rule.to, date: partnerDate, title, notes, type, linkId, timestamp: new Date().toISOString() };
+        events.push(mirrored);
+        created.push(mirrored);
+      }
     }
-  }
 
-  await writeJSON("events", events);
+    return events;
+  });
+
   return { ok: true, created };
 }
 
@@ -177,35 +194,44 @@ async function editEvent(body) {
   const notes = (body.notes || "").trim();
   if (!title) return { error: "Title is required" };
 
-  const events = await readJSON("events", []);
-  const target = events.find((e) => e.id === id);
-  if (!target) return { error: "Event not found" };
-
+  let notFound = false;
+  let count = 0;
   // Title/notes cascade to every event sharing the same linkId, so synced
   // pairs never drift out of sync. The date isn't editable here -- delete
   // and re-add if the date needs to change, so sync partners stay correct.
-  let count = 0;
-  events.forEach((e) => {
-    if (e.linkId === target.linkId) {
-      e.title = title;
-      e.notes = notes;
-      count++;
-    }
+  await updateJSON("events", [], (events) => {
+    const target = events.find((e) => e.id === id);
+    if (!target) { notFound = true; return events; }
+    count = 0;
+    events.forEach((e) => {
+      if (e.linkId === target.linkId) {
+        e.title = title;
+        e.notes = notes;
+        count++;
+      }
+    });
+    return events;
   });
 
-  await writeJSON("events", events);
+  if (notFound) return { error: "Event not found" };
   return { ok: true, updated: count };
 }
 
 async function deleteEvent(body) {
   const id = body.id;
-  const events = await readJSON("events", []);
-  const target = events.find((e) => e.id === id);
-  if (!target) return { error: "Event not found" };
+  let notFound = false;
+  let removed = 0;
 
-  const remaining = events.filter((e) => e.linkId !== target.linkId);
-  await writeJSON("events", remaining);
-  return { ok: true, removed: events.length - remaining.length };
+  await updateJSON("events", [], (events) => {
+    const target = events.find((e) => e.id === id);
+    if (!target) { notFound = true; return events; }
+    const remaining = events.filter((e) => e.linkId !== target.linkId);
+    removed = events.length - remaining.length;
+    return remaining;
+  });
+
+  if (notFound) return { error: "Event not found" };
+  return { ok: true, removed };
 }
 
 async function getFridayTypes() {
@@ -220,9 +246,10 @@ async function setFridayType(body) {
   if (weekdayName(date) !== "Friday") return { error: `${date} isn't a Friday.` };
   if (type !== "A" && type !== "B") return { error: "Type must be A or B" };
 
-  const fridayTypes = await readJSON("fridayTypes", {});
-  fridayTypes[date] = type;
-  await writeJSON("fridayTypes", fridayTypes);
+  await updateJSON("fridayTypes", {}, (fridayTypes) => {
+    fridayTypes[date] = type;
+    return fridayTypes;
+  });
   return { ok: true };
 }
 
