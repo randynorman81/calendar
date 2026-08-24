@@ -265,6 +265,7 @@ export default async (req) => {
       if (action === "slots") return ok({ ok: true, slots: SLOTS });
       if (action === "publicEvents") return ok(await publicEvents(url.searchParams.get("slot") || ""));
       if (action === "fridayTypes") return ok(await getFridayTypes());
+      if (action === "holidays") return ok({ ok: true, holidays: Array.from(HOLIDAYS).sort() });
       return ok({ error: "Unknown action" });
     }
 

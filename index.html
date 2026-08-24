@@ -30,7 +30,7 @@
 <main>
   <div class="hero">
     <h2>Find your class period</h2>
-    <p>Pick your period below to see upcoming quizzes, tests, and assignments for that class.</p>
+    <p>Pick your period, then click any day to see what's due.</p>
   </div>
 
   <div class="card">
@@ -42,7 +42,24 @@
     </div>
   </div>
 
-  <div id="result"></div>
+  <div id="calendar-card" class="calendar-card" style="display:none;">
+    <div class="calendar-header">
+      <button type="button" class="btn btn-sm" id="cal-prev">&larr;</button>
+      <h3 id="cal-month-label"></h3>
+      <button type="button" class="btn btn-sm" id="cal-next">&rarr;</button>
+    </div>
+    <div class="calendar-weekdays">
+      <span>Sun</span><span>Mon</span><span>Tue</span><span>Wed</span><span>Thu</span><span>Fri</span><span>Sat</span>
+    </div>
+    <div class="calendar-grid" id="calendar-grid"></div>
+    <div class="calendar-legend">
+      <span><span class="legend-dot legend-meets"></span> Class meets</span>
+      <span><span class="legend-dot legend-event"></span> Has an event</span>
+      <span><span class="legend-dot legend-holiday"></span> No school</span>
+    </div>
+  </div>
+
+  <div id="day-detail"></div>
 </main>
 
 <footer class="site-footer">
@@ -58,19 +75,54 @@ function escapeHtml(str) {
 }
 
 const TYPE_LABEL = { quiz: 'Quiz', test: 'Test', assignment: 'Assignment' };
+const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+const MONTH_NAMES = ["January","February","March","April","May","June","July","August","September","October","November","December"];
 
-function formatDate(dateStr) {
+function pad2(n) { return String(n).padStart(2, '0'); }
+function toDateStr(y, m, d) { return `${y}-${pad2(m + 1)}-${pad2(d)}`; }
+function weekdayName(dateStr) {
   const [y, m, d] = dateStr.split('-').map(Number);
-  const dt = new Date(y, m - 1, d);
-  return dt.toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' });
+  return WEEKDAYS[new Date(y, m - 1, d).getDay()];
+}
+function formatDateLong(dateStr) {
+  const [y, m, d] = dateStr.split('-').map(Number);
+  return new Date(y, m - 1, d).toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' });
+}
+
+function slotMeetsOnDate(slot, dateStr, fridayTypes, holidays) {
+  if (holidays.has(dateStr)) return false;
+  const wd = weekdayName(dateStr);
+  if (slot.dayType === 'A') {
+    if (wd === 'Monday' || wd === 'Wednesday') return true;
+    if (wd === 'Friday') return fridayTypes[dateStr] === 'A';
+    return false;
+  }
+  if (wd === 'Tuesday' || wd === 'Thursday') return true;
+  if (wd === 'Friday') return fridayTypes[dateStr] === 'B';
+  return false;
 }
 
 const slotSelect = document.getElementById('slot-select');
-const resultEl = document.getElementById('result');
+const calendarCard = document.getElementById('calendar-card');
+const calendarGrid = document.getElementById('calendar-grid');
+const monthLabel = document.getElementById('cal-month-label');
+const dayDetail = document.getElementById('day-detail');
+
+let SLOTS = [];
+let currentSlot = null;
+let currentEvents = [];
+let fridayTypes = {};
+let holidays = new Set();
+let selectedDate = null;
+
+const today = new Date();
+let viewYear = today.getFullYear();
+let viewMonth = today.getMonth();
 
 async function loadSlots() {
   const res = await apiGet('slots');
-  (res.slots || []).forEach(s => {
+  SLOTS = res.slots || [];
+  SLOTS.forEach(s => {
     const opt = document.createElement('option');
     opt.value = s.id;
     opt.textContent = `${s.label} (${s.dayType}-day)`;
@@ -79,48 +131,140 @@ async function loadSlots() {
   const saved = sessionStorage.getItem('calendarSlot');
   if (saved) {
     slotSelect.value = saved;
-    loadEvents(saved);
+    loadSlot(saved);
   }
 }
 
-async function loadEvents(slotId) {
-  if (!slotId) { resultEl.innerHTML = ''; return; }
+async function loadSlot(slotId) {
+  if (!slotId) { calendarCard.style.display = 'none'; dayDetail.innerHTML = ''; return; }
   sessionStorage.setItem('calendarSlot', slotId);
-  resultEl.innerHTML = '<div class="loading">Loading&hellip;</div>';
+  currentSlot = SLOTS.find(s => s.id === slotId);
+  dayDetail.innerHTML = '<div class="loading">Loading&hellip;</div>';
+
   try {
-    const res = await apiGet('publicEvents', { slot: slotId });
-    if (res.error) {
-      resultEl.innerHTML = `<div class="alert alert-error">${escapeHtml(res.error)}</div>`;
+    const [eventsRes, fridayRes, holidaysRes] = await Promise.all([
+      apiGet('publicEvents', { slot: slotId }),
+      apiGet('fridayTypes'),
+      apiGet('holidays')
+    ]);
+    if (eventsRes.error) {
+      dayDetail.innerHTML = `<div class="alert alert-error">${escapeHtml(eventsRes.error)}</div>`;
       return;
     }
-    if (res.events.length === 0) {
-      resultEl.innerHTML = `<div class="card empty-state">Nothing on the calendar yet for ${escapeHtml(res.slot.label)}.</div>`;
-      return;
-    }
-    resultEl.innerHTML = `
-      <h2 style="margin-bottom:4px;">${escapeHtml(res.slot.label)}</h2>
-      <div class="card">
-        <table class="roster">
-          <thead><tr><th>Date</th><th>Type</th><th>Title</th><th>Notes</th></tr></thead>
-          <tbody>
-            ${res.events.map(e => `
-              <tr>
-                <td>${formatDate(e.date)}</td>
-                <td>${escapeHtml(TYPE_LABEL[e.type] || 'Assignment')}</td>
-                <td>${escapeHtml(e.title)}</td>
-                <td>${e.notes ? escapeHtml(e.notes) : '<span class="hint" style="margin:0;">&mdash;</span>'}</td>
-              </tr>
-            `).join('')}
-          </tbody>
-        </table>
-      </div>
-    `;
+    currentEvents = eventsRes.events;
+    fridayTypes = fridayRes.fridayTypes || {};
+    holidays = new Set(holidaysRes.holidays || []);
+    dayDetail.innerHTML = '';
+
+    // Jump to the month of the nearest upcoming event, or today if none.
+    const todayStr = toDateStr(today.getFullYear(), today.getMonth(), today.getDate());
+    const upcoming = currentEvents.find(e => e.date >= todayStr);
+    const anchor = upcoming ? upcoming.date : todayStr;
+    const [ay, am] = anchor.split('-').map(Number);
+    viewYear = ay;
+    viewMonth = am - 1;
+
+    calendarCard.style.display = 'block';
+    renderCalendar();
   } catch (err) {
-    resultEl.innerHTML = '<div class="alert alert-error">Could not reach the server. This page needs to be running on Netlify (with functions deployed) to work.</div>';
+    dayDetail.innerHTML = '<div class="alert alert-error">Could not reach the server. This page needs to be running on Netlify (with functions deployed) to work.</div>';
   }
 }
 
-slotSelect.addEventListener('change', () => loadEvents(slotSelect.value));
+function eventsOn(dateStr) {
+  return currentEvents.filter(e => e.date === dateStr);
+}
+
+function renderCalendar() {
+  monthLabel.textContent = `${MONTH_NAMES[viewMonth]} ${viewYear}`;
+
+  const firstOfMonth = new Date(viewYear, viewMonth, 1);
+  const startWeekday = firstOfMonth.getDay();
+  const daysInMonth = new Date(viewYear, viewMonth + 1, 0).getDate();
+  const todayStr = toDateStr(today.getFullYear(), today.getMonth(), today.getDate());
+
+  let cells = '';
+  for (let i = 0; i < startWeekday; i++) {
+    cells += '<div class="calendar-cell empty"></div>';
+  }
+
+  for (let day = 1; day <= daysInMonth; day++) {
+    const dStr = toDateStr(viewYear, viewMonth, day);
+    const meets = currentSlot ? slotMeetsOnDate(currentSlot, dStr, fridayTypes, holidays) : false;
+    const isHoliday = holidays.has(dStr);
+    const dayEvents = eventsOn(dStr);
+    const classes = ['calendar-cell'];
+    if (dStr === todayStr) classes.push('today');
+    if (meets) classes.push('meets');
+    if (isHoliday) classes.push('holiday');
+    if (dayEvents.length > 0) classes.push('has-events');
+    if (dStr === selectedDate) classes.push('selected');
+
+    cells += `
+      <button type="button" class="${classes.join(' ')}" data-date="${dStr}">
+        <span class="cell-num">${day}</span>
+        ${dayEvents.length > 0 ? `<span class="cell-dots">${dayEvents.slice(0, 3).map(e => `<span class="event-dot event-dot-${e.type}"></span>`).join('')}</span>` : ''}
+      </button>
+    `;
+  }
+
+  calendarGrid.innerHTML = cells;
+  calendarGrid.querySelectorAll('.calendar-cell:not(.empty)').forEach(cell => {
+    cell.addEventListener('click', () => {
+      selectedDate = cell.dataset.date;
+      renderCalendar();
+      renderDayDetail(selectedDate);
+    });
+  });
+
+  if (selectedDate) renderDayDetail(selectedDate);
+}
+
+function renderDayDetail(dateStr) {
+  const meets = currentSlot ? slotMeetsOnDate(currentSlot, dateStr, fridayTypes, holidays) : false;
+  const isHoliday = holidays.has(dateStr);
+  const dayEvents = eventsOn(dateStr);
+
+  let statusLine;
+  if (isHoliday) {
+    statusLine = '<p class="hint">No school today.</p>';
+  } else if (!meets) {
+    statusLine = `<p class="hint">${escapeHtml(currentSlot.label)} doesn't meet today.</p>`;
+  } else if (dayEvents.length === 0) {
+    statusLine = '<p class="hint">Nothing scheduled.</p>';
+  } else {
+    statusLine = '';
+  }
+
+  dayDetail.innerHTML = `
+    <div class="card">
+      <h2 style="margin-top:0;">${formatDateLong(dateStr)}</h2>
+      ${statusLine}
+      ${dayEvents.length > 0 ? dayEvents.map(e => `
+        <div class="note">
+          <strong>${escapeHtml(TYPE_LABEL[e.type] || 'Assignment')}:</strong> ${escapeHtml(e.title)}
+          ${e.notes ? `<div class="hint" style="margin-top:4px;">${escapeHtml(e.notes)}</div>` : ''}
+        </div>
+      `).join('') : ''}
+    </div>
+  `;
+}
+
+document.getElementById('cal-prev').addEventListener('click', () => {
+  viewMonth--;
+  if (viewMonth < 0) { viewMonth = 11; viewYear--; }
+  renderCalendar();
+});
+document.getElementById('cal-next').addEventListener('click', () => {
+  viewMonth++;
+  if (viewMonth > 11) { viewMonth = 0; viewYear++; }
+  renderCalendar();
+});
+
+slotSelect.addEventListener('change', () => {
+  selectedDate = null;
+  loadSlot(slotSelect.value);
+});
 loadSlots();
 </script>
 </body>
