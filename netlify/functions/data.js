@@ -127,6 +127,25 @@ function newId() {
   return "id-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 10);
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// An event added moments ago can briefly be invisible to a *different*
+// request's read (Blobs replication lag), even though the write already
+// landed safely -- so a delete/edit fired right after an add could
+// otherwise get a false "Event not found." Retry the lookup itself before
+// giving up, rather than trusting the first read.
+async function findEventWithRetry(id, attempts = 6, delayMs = 350) {
+  for (let i = 0; i < attempts; i++) {
+    const events = await readJSON("events", []);
+    const target = events.find((e) => e.id === id);
+    if (target) return target;
+    if (i < attempts - 1) await sleep(delayMs);
+  }
+  return null;
+}
+
 async function publicEvents(slotId) {
   const slot = slotById(slotId);
   if (!slot) return { error: "Unknown period" };
@@ -194,14 +213,14 @@ async function editEvent(body) {
   const notes = (body.notes || "").trim();
   if (!title) return { error: "Title is required" };
 
-  let notFound = false;
-  let count = 0;
+  const target = await findEventWithRetry(id);
+  if (!target) return { error: "Event not found" };
+
   // Title/notes cascade to every event sharing the same linkId, so synced
   // pairs never drift out of sync. The date isn't editable here -- delete
   // and re-add if the date needs to change, so sync partners stay correct.
+  let count = 0;
   await updateJSON("events", [], (events) => {
-    const target = events.find((e) => e.id === id);
-    if (!target) { notFound = true; return events; }
     count = 0;
     events.forEach((e) => {
       if (e.linkId === target.linkId) {
@@ -213,24 +232,21 @@ async function editEvent(body) {
     return events;
   });
 
-  if (notFound) return { error: "Event not found" };
   return { ok: true, updated: count };
 }
 
 async function deleteEvent(body) {
   const id = body.id;
-  let notFound = false;
-  let removed = 0;
+  const target = await findEventWithRetry(id);
+  if (!target) return { error: "Event not found" };
 
+  let removed = 0;
   await updateJSON("events", [], (events) => {
-    const target = events.find((e) => e.id === id);
-    if (!target) { notFound = true; return events; }
     const remaining = events.filter((e) => e.linkId !== target.linkId);
     removed = events.length - remaining.length;
     return remaining;
   });
 
-  if (notFound) return { error: "Event not found" };
   return { ok: true, removed };
 }
 
