@@ -84,46 +84,36 @@
       <div id="friday-list" style="margin-top:14px;"></div>
     </div>
 
-    <h2 style="margin-bottom:4px;">Add an Event</h2>
-    <p class="hint" style="margin-top:0;">1A auto-copies to 2B (and back), and 3A/4A auto-copy to each other <em>and</em> forward to 3B's next class &mdash; you'll see a confirmation showing exactly what got added. 4B (EC) has no sync partner.</p>
+    <h2 style="margin-bottom:4px;">Events</h2>
+    <p class="hint" style="margin-top:0;">Pick a period, then click any day to view, add, edit, or delete that day's event. 1A auto-copies to 2B (and back), and 3A/4A auto-copy to each other <em>and</em> forward to 3B's next class &mdash; you'll see a confirmation showing exactly what got added. 4B (EC) has no sync partner. Events tagged <span class="synced-badge">synced</span> share a link &mdash; editing or deleting one updates all of them.</p>
+
     <div class="card">
-      <form class="stack" id="event-form">
-        <div class="field-row">
-          <div class="field">
-            <label for="event-slot">Period</label>
-            <select id="event-slot" required></select>
-          </div>
-          <div class="field">
-            <label for="event-date">Date</label>
-            <input type="date" id="event-date" required>
-          </div>
-          <div class="field">
-            <label for="event-type">Type</label>
-            <select id="event-type">
-              <option value="assignment">Assignment</option>
-              <option value="quiz">Quiz</option>
-              <option value="test">Test</option>
-            </select>
-          </div>
-        </div>
-        <div class="field">
-          <label for="event-title">Title</label>
-          <input type="text" id="event-title" required placeholder="e.g. 1.2 CIA Triad Quiz">
-        </div>
-        <div class="field">
-          <label for="event-notes">Notes (optional)</label>
-          <textarea id="event-notes" rows="2"></textarea>
-        </div>
-        <button type="submit" class="btn btn-primary" style="align-self:flex-start;">Add Event</button>
-      </form>
-      <div id="event-alert"></div>
+      <div class="field">
+        <label for="event-slot">Period</label>
+        <select id="event-slot" required>
+          <option value="">Choose a period&hellip;</option>
+        </select>
+      </div>
     </div>
 
-    <h2 style="margin-bottom:4px;">All Events</h2>
-    <p class="hint" style="margin-top:0;">Events with the same <span class="synced-badge">synced</span> tag share a link &mdash; editing or deleting one updates all of them.</p>
-    <div class="card">
-      <div id="events-table"></div>
+    <div id="calendar-card" class="calendar-card" style="display:none;">
+      <div class="calendar-header">
+        <button type="button" class="btn btn-sm" id="cal-prev">&larr;</button>
+        <h3 id="cal-month-label"></h3>
+        <button type="button" class="btn btn-sm" id="cal-next">&rarr;</button>
+      </div>
+      <div class="calendar-weekdays">
+        <span>Sun</span><span>Mon</span><span>Tue</span><span>Wed</span><span>Thu</span><span>Fri</span><span>Sat</span>
+      </div>
+      <div class="calendar-grid" id="calendar-grid"></div>
+      <div class="calendar-legend">
+        <span><span class="legend-dot legend-meets"></span> Class meets</span>
+        <span><span class="legend-dot legend-event"></span> Has an event</span>
+        <span><span class="legend-dot legend-holiday"></span> No school</span>
+      </div>
     </div>
+
+    <div id="day-detail"></div>
 
   </div>
 </main>
@@ -152,6 +142,33 @@ const adminContent = document.getElementById('admin-content');
 const pinForm = document.getElementById('pin-form');
 const pinAlert = document.getElementById('pin-alert');
 
+const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+const MONTH_NAMES = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+const TYPE_LABEL = { quiz: 'Quiz', test: 'Test', assignment: 'Assignment' };
+
+function pad2(n) { return String(n).padStart(2, '0'); }
+function toDateStr(y, m, d) { return `${y}-${pad2(m + 1)}-${pad2(d)}`; }
+function weekdayName(dateStr) {
+  const [y, m, d] = dateStr.split('-').map(Number);
+  return WEEKDAYS[new Date(y, m - 1, d).getDay()];
+}
+function formatDateLong(dateStr) {
+  const [y, m, d] = dateStr.split('-').map(Number);
+  return new Date(y, m - 1, d).toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' });
+}
+function slotMeetsOnDate(slot, dateStr, fridayTypes, holidays) {
+  if (holidays.has(dateStr)) return false;
+  const wd = weekdayName(dateStr);
+  if (slot.dayType === 'A') {
+    if (wd === 'Monday' || wd === 'Wednesday') return true;
+    if (wd === 'Friday') return fridayTypes[dateStr] === 'A';
+    return false;
+  }
+  if (wd === 'Tuesday' || wd === 'Thursday') return true;
+  if (wd === 'Friday') return fridayTypes[dateStr] === 'B';
+  return false;
+}
+
 let SLOTS = [];
 let SYNC_RULES = [];
 // Kept in sync locally after every mutation instead of re-fetched from the
@@ -160,6 +177,18 @@ let SYNC_RULES = [];
 // though the write itself already landed safely.
 let currentEvents = [];
 let currentFridayTypes = {};
+let holidays = new Set();
+
+let selectedSlot = null;
+let selectedDate = null;
+const today = new Date();
+let viewYear = today.getFullYear();
+let viewMonth = today.getMonth();
+
+const calendarCard = document.getElementById('calendar-card');
+const calendarGrid = document.getElementById('calendar-grid');
+const monthLabel = document.getElementById('cal-month-label');
+const dayDetail = document.getElementById('day-detail');
 
 pinForm.addEventListener('submit', async (e) => {
   e.preventDefault();
@@ -197,10 +226,17 @@ function showAdmin() {
 }
 
 async function init() {
-  const slotsRes = await apiPostAuthed({ action: 'adminEvents' });
-  if (slotsRes.error) return;
-  SLOTS = slotsRes.slots;
-  SYNC_RULES = slotsRes.syncRules;
+  const [adminRes, fridayRes, holidaysRes] = await Promise.all([
+    apiPostAuthed({ action: 'adminEvents' }),
+    apiGet('fridayTypes'),
+    apiGet('holidays')
+  ]);
+  if (adminRes.error) return;
+  SLOTS = adminRes.slots;
+  SYNC_RULES = adminRes.syncRules;
+  currentEvents = adminRes.events;
+  currentFridayTypes = fridayRes.fridayTypes || {};
+  holidays = new Set(holidaysRes.holidays || []);
 
   const slotSelect = document.getElementById('event-slot');
   SLOTS.forEach(s => {
@@ -209,12 +245,16 @@ async function init() {
     opt.textContent = `${s.label} (${s.dayType}-day)`;
     slotSelect.appendChild(opt);
   });
+  slotSelect.addEventListener('change', () => {
+    selectedDate = null;
+    selectedSlot = SLOTS.find(s => s.id === slotSelect.value) || null;
+    if (!selectedSlot) { calendarCard.style.display = 'none'; dayDetail.innerHTML = ''; return; }
+    jumpToRelevantMonth();
+    calendarCard.style.display = 'block';
+    dayDetail.innerHTML = '';
+    renderCalendar();
+  });
 
-  currentEvents = slotsRes.events;
-  renderEventsTable();
-
-  const fridayRes = await apiGet('fridayTypes');
-  currentFridayTypes = fridayRes.fridayTypes || {};
   renderFridayList();
 }
 
@@ -229,46 +269,137 @@ function formatDate(dateStr) {
   return dt.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
 }
 
-function renderEventsTable() {
-  const el = document.getElementById('events-table');
-  if (currentEvents.length === 0) {
-    el.innerHTML = '<div class="empty-state">No events yet.</div>';
-    return;
+function eventsOn(dateStr) {
+  return currentEvents.filter(e => e.slotId === selectedSlot.id && e.date === dateStr);
+}
+
+function jumpToRelevantMonth() {
+  const todayStr = toDateStr(today.getFullYear(), today.getMonth(), today.getDate());
+  const upcoming = currentEvents
+    .filter(e => e.slotId === selectedSlot.id && e.date >= todayStr)
+    .sort((a, b) => a.date.localeCompare(b.date))[0];
+  const anchor = upcoming ? upcoming.date : todayStr;
+  const [ay, am] = anchor.split('-').map(Number);
+  viewYear = ay;
+  viewMonth = am - 1;
+}
+
+function renderCalendar() {
+  monthLabel.textContent = `${MONTH_NAMES[viewMonth]} ${viewYear}`;
+
+  const firstOfMonth = new Date(viewYear, viewMonth, 1);
+  const startWeekday = firstOfMonth.getDay();
+  const daysInMonth = new Date(viewYear, viewMonth + 1, 0).getDate();
+  const todayStr = toDateStr(today.getFullYear(), today.getMonth(), today.getDate());
+
+  let cells = '';
+  for (let i = 0; i < startWeekday; i++) {
+    cells += '<div class="calendar-cell empty"></div>';
   }
-  el.innerHTML = `
-    <table class="roster">
-      <thead><tr><th>Date</th><th>Period</th><th>Type</th><th>Title</th><th>Notes</th><th></th></tr></thead>
-      <tbody>
-        ${currentEvents.map(e => {
-          const linkCount = currentEvents.filter(x => x.linkId === e.linkId).length;
-          return `
-            <tr>
-              <td>${formatDate(e.date)}</td>
-              <td>${escapeHtml(slotLabel(e.slotId))}</td>
-              <td>${escapeHtml(e.type)}</td>
-              <td>${escapeHtml(e.title)}${linkCount > 1 ? '<span class="synced-badge">synced</span>' : ''}</td>
-              <td>${e.notes ? escapeHtml(e.notes) : ''}</td>
-              <td class="row-actions">
+
+  for (let day = 1; day <= daysInMonth; day++) {
+    const dStr = toDateStr(viewYear, viewMonth, day);
+    const meets = slotMeetsOnDate(selectedSlot, dStr, currentFridayTypes, holidays);
+    const isHoliday = holidays.has(dStr);
+    const dayEvents = eventsOn(dStr);
+    const classes = ['calendar-cell'];
+    if (dStr === todayStr) classes.push('today');
+    if (meets) classes.push('meets');
+    if (isHoliday) classes.push('holiday');
+    if (dayEvents.length > 0) classes.push('has-events');
+    if (dStr === selectedDate) classes.push('selected');
+
+    cells += `
+      <button type="button" class="${classes.join(' ')}" data-date="${dStr}">
+        <span class="cell-num">${day}</span>
+        ${dayEvents.length > 0 ? `<span class="cell-dots">${dayEvents.slice(0, 3).map(e => `<span class="event-dot event-dot-${e.type}"></span>`).join('')}</span>` : ''}
+      </button>
+    `;
+  }
+
+  calendarGrid.innerHTML = cells;
+  calendarGrid.querySelectorAll('.calendar-cell:not(.empty)').forEach(cell => {
+    cell.addEventListener('click', () => {
+      selectedDate = cell.dataset.date;
+      renderCalendar();
+      renderDayDetail(selectedDate);
+    });
+  });
+
+  if (selectedDate) renderDayDetail(selectedDate);
+}
+
+function renderDayDetail(dateStr) {
+  const meets = slotMeetsOnDate(selectedSlot, dateStr, currentFridayTypes, holidays);
+  const isHoliday = holidays.has(dateStr);
+  const dayEvents = eventsOn(dateStr);
+
+  let blockedNote = '';
+  if (isHoliday) blockedNote = '<div class="alert alert-warning">No school this day &mdash; can\'t add an event here.</div>';
+  else if (!meets) blockedNote = `<div class="alert alert-warning">${escapeHtml(selectedSlot.label)} doesn't meet this day &mdash; can't add an event here.</div>`;
+
+  dayDetail.innerHTML = `
+    <div class="card">
+      <h2 style="margin-top:0;">${formatDateLong(dateStr)}</h2>
+
+      ${dayEvents.map(e => {
+        const linkCount = currentEvents.filter(x => x.linkId === e.linkId).length;
+        return `
+          <div class="note">
+            <div class="row-actions" style="justify-content:space-between; align-items:flex-start;">
+              <div>
+                <strong>${escapeHtml(TYPE_LABEL[e.type] || 'Assignment')}:</strong> ${escapeHtml(e.title)}${linkCount > 1 ? '<span class="synced-badge">synced</span>' : ''}
+                ${e.notes ? `<div class="hint" style="margin-top:4px;">${escapeHtml(e.notes)}</div>` : ''}
+              </div>
+              <div class="row-actions">
                 <button class="btn btn-sm" data-edit="${e.id}">Edit</button>
                 <button class="btn btn-sm btn-danger" data-delete="${e.id}">Delete</button>
-              </td>
-            </tr>`;
-        }).join('')}
-      </tbody>
-    </table>
+              </div>
+            </div>
+          </div>
+        `;
+      }).join('')}
+
+      ${blockedNote || `
+        <h3 style="margin-bottom:8px;">Add an event to this day</h3>
+        <form class="stack" id="day-event-form">
+          <div class="field-row">
+            <div class="field">
+              <label for="day-event-type">Type</label>
+              <select id="day-event-type">
+                <option value="assignment">Assignment</option>
+                <option value="quiz">Quiz</option>
+                <option value="test">Test</option>
+              </select>
+            </div>
+          </div>
+          <div class="field">
+            <label for="day-event-title">Title</label>
+            <input type="text" id="day-event-title" required placeholder="e.g. 1.2 CIA Triad Quiz">
+          </div>
+          <div class="field">
+            <label for="day-event-notes">Notes (optional)</label>
+            <textarea id="day-event-notes" rows="2"></textarea>
+          </div>
+          <button type="submit" class="btn btn-primary" style="align-self:flex-start;">Add Event</button>
+        </form>
+        <div id="day-event-alert"></div>
+      `}
+    </div>
   `;
 
-  el.querySelectorAll('[data-delete]').forEach(btn => {
+  dayDetail.querySelectorAll('[data-delete]').forEach(btn => {
     btn.addEventListener('click', async () => {
       if (!confirm('Delete this event? If it\'s synced, its linked copy will be deleted too.')) return;
       const target = currentEvents.find(x => x.id === btn.dataset.delete);
       const res = await apiPostAuthed({ action: 'deleteEvent', id: btn.dataset.delete });
       if (res.error) { alert(res.error); return; }
       currentEvents = currentEvents.filter(e => e.linkId !== target.linkId);
-      renderEventsTable();
+      renderCalendar();
+      renderDayDetail(dateStr);
     });
   });
-  el.querySelectorAll('[data-edit]').forEach(btn => {
+  dayDetail.querySelectorAll('[data-edit]').forEach(btn => {
     btn.addEventListener('click', async () => {
       const ev = currentEvents.find(x => x.id === btn.dataset.edit);
       const title = prompt('Title', ev.title);
@@ -280,35 +411,47 @@ function renderEventsTable() {
       currentEvents.forEach(e => {
         if (e.linkId === ev.linkId) { e.title = title; e.notes = notes; }
       });
-      renderEventsTable();
+      renderCalendar();
+      renderDayDetail(dateStr);
     });
   });
+
+  const dayForm = document.getElementById('day-event-form');
+  if (dayForm) {
+    dayForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const type = document.getElementById('day-event-type').value;
+      const title = document.getElementById('day-event-title').value.trim();
+      const notes = document.getElementById('day-event-notes').value.trim();
+      const alertEl = document.getElementById('day-event-alert');
+      setAlert(alertEl, 'info', 'Saving…');
+
+      const res = await apiPostAuthed({ action: 'addEvent', slotId: selectedSlot.id, date: dateStr, type, title, notes });
+      if (res.error) {
+        setAlert(alertEl, 'error', res.error);
+        return;
+      }
+
+      const extra = res.created.length > 1
+        ? ` Also added to: ${res.created.slice(1).map(c => `${slotLabel(c.slotId)} on ${formatDate(c.date)}`).join(', ')}.`
+        : '';
+      currentEvents = currentEvents.concat(res.created);
+      renderCalendar();
+      renderDayDetail(dateStr);
+      setAlert(document.getElementById('day-event-alert'), 'success', `Added.${extra}`);
+    });
+  }
 }
 
-document.getElementById('event-form').addEventListener('submit', async (e) => {
-  e.preventDefault();
-  const slotId = document.getElementById('event-slot').value;
-  const date = document.getElementById('event-date').value;
-  const type = document.getElementById('event-type').value;
-  const title = document.getElementById('event-title').value.trim();
-  const notes = document.getElementById('event-notes').value.trim();
-  const alertEl = document.getElementById('event-alert');
-  setAlert(alertEl, 'info', 'Saving…');
-
-  const res = await apiPostAuthed({ action: 'addEvent', slotId, date, type, title, notes });
-  if (res.error) {
-    setAlert(alertEl, 'error', res.error);
-    return;
-  }
-
-  const extra = res.created.length > 1
-    ? ` Also added to: ${res.created.slice(1).map(c => `${slotLabel(c.slotId)} on ${formatDate(c.date)}`).join(', ')}.`
-    : '';
-  setAlert(alertEl, 'success', `Added.${extra}`);
-  document.getElementById('event-title').value = '';
-  document.getElementById('event-notes').value = '';
-  currentEvents = currentEvents.concat(res.created);
-  renderEventsTable();
+document.getElementById('cal-prev').addEventListener('click', () => {
+  viewMonth--;
+  if (viewMonth < 0) { viewMonth = 11; viewYear--; }
+  renderCalendar();
+});
+document.getElementById('cal-next').addEventListener('click', () => {
+  viewMonth++;
+  if (viewMonth > 11) { viewMonth = 0; viewYear++; }
+  renderCalendar();
 });
 
 function renderFridayList() {
