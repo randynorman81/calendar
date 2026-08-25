@@ -186,7 +186,13 @@ async function loadSlot(slotId) {
   }
   sessionStorage.setItem('calendarSlot', slotId);
   selectedSlot = SLOTS.find(s => s.id === slotId);
-  dayDetail.innerHTML = selectedDate ? '' : '<p class="hint">Click any day to see what\'s due.</p>';
+  // A selected date belongs to whichever period's calendar it was clicked
+  // on -- carrying it over to a different period showed stale/misleading
+  // details (or the wrong month entirely) for events that actually landed
+  // on this period's own dates, most visibly right after a sync-created
+  // event on a different month than the one currently in view.
+  selectedDate = null;
+  dayDetail.innerHTML = '<p class="hint">Click any day to see what\'s due.</p>';
 
   try {
     const eventsRes = await apiGet('publicEvents', { slot: slotId });
@@ -196,17 +202,14 @@ async function loadSlot(slotId) {
     }
     currentEvents = eventsRes.events;
 
-    if (!selectedDate) {
-      const todayStr = toDateStr(today.getFullYear(), today.getMonth(), today.getDate());
-      const upcoming = currentEvents.find(e => e.date >= todayStr);
-      const anchor = upcoming ? upcoming.date : todayStr;
-      const [ay, am] = anchor.split('-').map(Number);
-      viewYear = ay;
-      viewMonth = am - 1;
-    }
+    const todayStr = toDateStr(today.getFullYear(), today.getMonth(), today.getDate());
+    const upcoming = currentEvents.find(e => e.date >= todayStr);
+    const anchor = upcoming ? upcoming.date : todayStr;
+    const [ay, am] = anchor.split('-').map(Number);
+    viewYear = ay;
+    viewMonth = am - 1;
 
     renderCalendar();
-    if (selectedDate) renderDayDetail(selectedDate);
   } catch (err) {
     dayDetail.innerHTML = '<div class="alert alert-error">Could not reach the server. This page needs to be running on Netlify (with functions deployed) to work.</div>';
   }
