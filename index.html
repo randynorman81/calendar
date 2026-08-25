@@ -65,7 +65,7 @@
     </div>
   </div>
 
-  <div id="calendar-card" class="calendar-card" style="display:none;">
+  <div id="calendar-card" class="calendar-card">
     <div class="calendar-header">
       <button type="button" class="btn btn-sm" id="cal-prev">&larr;</button>
       <h3 id="cal-month-label"></h3>
@@ -143,7 +143,6 @@ function slotMeetsOnDate(slot, dateStr, fridayTypes, holidays) {
 }
 
 const slotSelect = document.getElementById('slot-select');
-const calendarCard = document.getElementById('calendar-card');
 const calendarGrid = document.getElementById('calendar-grid');
 const monthLabel = document.getElementById('cal-month-label');
 const dayDetail = document.getElementById('day-detail');
@@ -205,59 +204,79 @@ function renderSigninArea() {
   }
 }
 
-async function loadSlots() {
-  const res = await apiGet('slots');
-  SLOTS = res.slots || [];
-  SLOTS.forEach(s => {
-    const opt = document.createElement('option');
-    opt.value = s.id;
-    opt.textContent = `${s.label} (${s.dayType}-day)`;
-    slotSelect.appendChild(opt);
-  });
-  const saved = sessionStorage.getItem('calendarSlot');
-  if (saved) {
-    slotSelect.value = saved;
-    loadSlot(saved);
+// The calendar grid itself is always visible, even with no period picked
+// yet -- it used to stay hidden until a period was chosen, which made the
+// page look unresponsive (nothing to click) to anyone who didn't notice
+// the dropdown first. Picking a period just adds the "meets"/event data
+// on top of the same always-there grid.
+async function init() {
+  try {
+    const [slotsRes, fridayRes, holidaysRes] = await Promise.all([
+      apiGet('slots'),
+      apiGet('fridayTypes'),
+      apiGet('holidays')
+    ]);
+    SLOTS = slotsRes.slots || [];
+    SLOTS.forEach(s => {
+      const opt = document.createElement('option');
+      opt.value = s.id;
+      opt.textContent = `${s.label} (${s.dayType}-day)`;
+      slotSelect.appendChild(opt);
+    });
+    fridayTypes = fridayRes.fridayTypes || {};
+    holidays = new Set(holidaysRes.holidays || []);
+
+    renderCalendar();
+
+    const saved = sessionStorage.getItem('calendarSlot');
+    if (saved && SLOTS.some(s => s.id === saved)) {
+      slotSelect.value = saved;
+      loadSlot(saved);
+    }
+  } catch (err) {
+    dayDetail.innerHTML = '<div class="alert alert-error">Could not reach the server. This page needs to be running on Netlify (with functions deployed) to work.</div>';
   }
 }
 
 async function loadSlot(slotId) {
-  if (!slotId) { calendarCard.style.display = 'none'; dayDetail.innerHTML = ''; return; }
+  if (!slotId) {
+    sessionStorage.removeItem('calendarSlot');
+    selectedSlot = null;
+    currentEvents = [];
+    renderCalendar();
+    if (selectedDate) renderDayDetail(selectedDate);
+    return;
+  }
   sessionStorage.setItem('calendarSlot', slotId);
   selectedSlot = SLOTS.find(s => s.id === slotId);
-  selectedDate = null;
-  dayDetail.innerHTML = '<div class="loading">Loading&hellip;</div>';
+  dayDetail.innerHTML = selectedDate ? '' : '<p class="hint">Click any day to see what\'s due.</p>';
 
   try {
-    const [eventsRes, fridayRes, holidaysRes] = await Promise.all([
-      apiGet('publicEvents', { slot: slotId }),
-      apiGet('fridayTypes'),
-      apiGet('holidays')
-    ]);
+    const eventsRes = await apiGet('publicEvents', { slot: slotId });
     if (eventsRes.error) {
       dayDetail.innerHTML = `<div class="alert alert-error">${escapeHtml(eventsRes.error)}</div>`;
       return;
     }
     currentEvents = eventsRes.events;
-    fridayTypes = fridayRes.fridayTypes || {};
-    holidays = new Set(holidaysRes.holidays || []);
-    dayDetail.innerHTML = '';
 
-    const todayStr = toDateStr(today.getFullYear(), today.getMonth(), today.getDate());
-    const upcoming = currentEvents.find(e => e.date >= todayStr);
-    const anchor = upcoming ? upcoming.date : todayStr;
-    const [ay, am] = anchor.split('-').map(Number);
-    viewYear = ay;
-    viewMonth = am - 1;
+    if (!selectedDate) {
+      const todayStr = toDateStr(today.getFullYear(), today.getMonth(), today.getDate());
+      const upcoming = currentEvents.find(e => e.date >= todayStr);
+      const anchor = upcoming ? upcoming.date : todayStr;
+      const [ay, am] = anchor.split('-').map(Number);
+      viewYear = ay;
+      viewMonth = am - 1;
+    }
 
-    calendarCard.style.display = 'block';
     renderCalendar();
+    if (selectedDate) renderDayDetail(selectedDate);
   } catch (err) {
     dayDetail.innerHTML = '<div class="alert alert-error">Could not reach the server. This page needs to be running on Netlify (with functions deployed) to work.</div>';
   }
 }
 
 function eventsOn(dateStr) {
+  if (!selectedSlot) return [];
   // currentEvents can briefly contain another slot's events too -- a sync
   // pair's mirrored copy lands in currentEvents right after an add so the
   // "synced" badge can work, even though it belongs to a different period.
@@ -315,11 +334,21 @@ function slotLabel(id) {
 }
 
 function renderDayDetail(dateStr) {
+  if (!selectedSlot) {
+    dayDetail.innerHTML = `
+      <div class="card">
+        <h2 style="margin-top:0;">${formatDateLong(dateStr)}</h2>
+        <p class="hint">Pick your period above to see what's due this day.</p>
+      </div>
+    `;
+    return;
+  }
+
   const isHoliday = holidays.has(dateStr);
   const isFriday = weekdayName(dateStr) === 'Friday';
   const fridayUnset = isFriday && !isHoliday && !fridayTypes[dateStr];
-  const meets = selectedSlot ? slotMeetsOnDate(selectedSlot, dateStr, fridayTypes, holidays) : false;
-  const dayEvents = eventsOn(dateStr).filter(e => e.slotId === selectedSlot.id);
+  const meets = slotMeetsOnDate(selectedSlot, dateStr, fridayTypes, holidays);
+  const dayEvents = eventsOn(dateStr);
 
   // Teacher view: manage everything inline. Student view: read-only.
   if (!isAdmin) {
@@ -507,7 +536,7 @@ if (getPin()) {
   });
 }
 renderSigninArea();
-loadSlots();
+init();
 </script>
 </body>
 </html>
