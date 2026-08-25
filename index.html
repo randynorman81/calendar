@@ -23,8 +23,6 @@
     background: var(--black);
     margin-left: 6px;
   }
-  .signin-inline { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-  .signin-inline input { max-width: 140px; }
 </style>
 </head>
 <body>
@@ -47,7 +45,7 @@
 <main>
   <div class="hero">
     <h2>Find your class period</h2>
-    <p>Pick your period, then click any day to see what's due.</p>
+    <p>Pick your period, then click any day to see what's due &mdash; or add, edit, or delete an event right there.</p>
   </div>
 
   <div class="card">
@@ -56,12 +54,6 @@
       <select id="slot-select">
         <option value="">Choose a period&hellip;</option>
       </select>
-    </div>
-  </div>
-
-  <div class="card" id="teacher-card">
-    <div id="signin-area">
-      <a href="#" id="signin-toggle" class="hint" style="text-decoration:underline;">Teacher sign in</a>
     </div>
   </div>
 
@@ -101,20 +93,6 @@ function setAlert(el, kind, msg) {
   el.innerHTML = msg ? `<div class="alert alert-${kind}">${escapeHtml(msg)}</div>` : '';
 }
 
-const PIN_KEY = 'classCalendarPin';
-function getPin() { return sessionStorage.getItem(PIN_KEY) || ''; }
-
-async function apiPostAuthed(payload) {
-  const res = await apiPost(Object.assign({}, payload, { pin: getPin() }));
-  if (res.error === 'Invalid PIN') {
-    sessionStorage.removeItem(PIN_KEY);
-    isAdmin = false;
-    renderSigninArea();
-    if (selectedDate) renderDayDetail(selectedDate);
-  }
-  return res;
-}
-
 const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 const MONTH_NAMES = ["January","February","March","April","May","June","July","August","September","October","November","December"];
 const TYPE_LABEL = { quiz: 'Quiz', test: 'Test', assignment: 'Assignment' };
@@ -146,7 +124,6 @@ const slotSelect = document.getElementById('slot-select');
 const calendarGrid = document.getElementById('calendar-grid');
 const monthLabel = document.getElementById('cal-month-label');
 const dayDetail = document.getElementById('day-detail');
-const signinArea = document.getElementById('signin-area');
 
 let SLOTS = [];
 let selectedSlot = null;
@@ -154,55 +131,10 @@ let currentEvents = [];
 let fridayTypes = {};
 let holidays = new Set();
 let selectedDate = null;
-let isAdmin = false;
 
 const today = new Date();
 let viewYear = today.getFullYear();
 let viewMonth = today.getMonth();
-
-function renderSigninArea() {
-  if (isAdmin) {
-    signinArea.innerHTML = `<span class="hint">Signed in as teacher &middot; <a href="#" id="signout-link" style="text-decoration:underline;">Sign out</a></span>`;
-    document.getElementById('signout-link').addEventListener('click', (e) => {
-      e.preventDefault();
-      sessionStorage.removeItem(PIN_KEY);
-      isAdmin = false;
-      renderSigninArea();
-      if (selectedDate) renderDayDetail(selectedDate);
-    });
-  } else {
-    signinArea.innerHTML = `<a href="#" id="signin-toggle" class="hint" style="text-decoration:underline;">Teacher sign in</a>`;
-    document.getElementById('signin-toggle').addEventListener('click', (e) => {
-      e.preventDefault();
-      signinArea.innerHTML = `
-        <form class="signin-inline" id="pin-form">
-          <input type="password" id="pin-input" inputmode="numeric" autocomplete="off" placeholder="PIN" required>
-          <button type="submit" class="btn btn-sm btn-primary">Unlock</button>
-        </form>
-        <div id="pin-alert"></div>
-      `;
-      document.getElementById('pin-form').addEventListener('submit', async (ev) => {
-        ev.preventDefault();
-        const pin = document.getElementById('pin-input').value.trim();
-        const alertEl = document.getElementById('pin-alert');
-        setAlert(alertEl, 'info', 'Checking…');
-        try {
-          const res = await apiPost({ action: 'verifyPin', pin });
-          if (res.ok) {
-            sessionStorage.setItem(PIN_KEY, pin);
-            isAdmin = true;
-            renderSigninArea();
-            if (selectedDate) renderDayDetail(selectedDate);
-          } else {
-            setAlert(alertEl, 'error', res.error || 'Incorrect PIN.');
-          }
-        } catch (err) {
-          setAlert(alertEl, 'error', 'Could not reach the server.');
-        }
-      });
-    });
-  }
-}
 
 // The calendar grid itself is always visible, even with no period picked
 // yet -- it used to stay hidden until a period was chosen, which made the
@@ -351,32 +283,6 @@ function renderDayDetail(dateStr) {
   const meets = slotMeetsOnDate(selectedSlot, dateStr, fridayTypes, holidays);
   const dayEvents = eventsOn(dateStr);
 
-  // Teacher view: manage everything inline. Student view: read-only.
-  if (!isAdmin) {
-    let statusLine;
-    if (isHoliday) statusLine = '<p class="hint">No school today.</p>';
-    else if (fridayUnset) statusLine = '<p class="hint">This Friday\'s schedule hasn\'t been posted yet &mdash; check with your teacher.</p>';
-    else if (!meets) statusLine = `<p class="hint">${escapeHtml(selectedSlot.label)} doesn't meet today.</p>`;
-    else if (dayEvents.length === 0) statusLine = '<p class="hint">Nothing scheduled.</p>';
-    else statusLine = '';
-
-    dayDetail.innerHTML = `
-      <div class="card">
-        <h2 style="margin-top:0;">${formatDateLong(dateStr)}</h2>
-        ${statusLine}
-        ${dayEvents.map(e => `
-          <div class="note">
-            <strong>${escapeHtml(TYPE_LABEL[e.type] || 'Assignment')}:</strong> ${escapeHtml(e.title)}
-            ${e.notes ? `<div class="hint" style="margin-top:4px;">${escapeHtml(e.notes)}</div>` : ''}
-          </div>
-        `).join('')}
-      </div>
-    `;
-    return;
-  }
-
-  // --- Admin (signed-in) view below ---
-
   let fridayPrompt = '';
   if (fridayUnset) {
     fridayPrompt = `
@@ -454,7 +360,7 @@ function renderDayDetail(dateStr) {
   dayDetail.querySelectorAll('[data-friday-type]').forEach(btn => {
     btn.addEventListener('click', async () => {
       const type = btn.dataset.fridayType;
-      const res = await apiPostAuthed({ action: 'setFridayType', date: dateStr, type });
+      const res = await apiPost({ action: 'setFridayType', date: dateStr, type });
       if (res.error) { alert(res.error); return; }
       fridayTypes[dateStr] = type;
       renderCalendar();
@@ -466,7 +372,7 @@ function renderDayDetail(dateStr) {
     btn.addEventListener('click', async () => {
       if (!confirm('Delete this event? If it\'s synced, its linked copy will be deleted too.')) return;
       const target = currentEvents.find(x => x.id === btn.dataset.delete);
-      const res = await apiPostAuthed({ action: 'deleteEvent', id: btn.dataset.delete });
+      const res = await apiPost({ action: 'deleteEvent', id: btn.dataset.delete });
       if (res.error) { alert(res.error); return; }
       currentEvents = currentEvents.filter(e => e.linkId !== target.linkId);
       renderCalendar();
@@ -480,7 +386,7 @@ function renderDayDetail(dateStr) {
       if (title === null) return;
       const notes = prompt('Notes', ev.notes || '');
       if (notes === null) return;
-      const res = await apiPostAuthed({ action: 'editEvent', id: ev.id, title, notes });
+      const res = await apiPost({ action: 'editEvent', id: ev.id, title, notes });
       if (res.error) { alert(res.error); return; }
       currentEvents.forEach(e => {
         if (e.linkId === ev.linkId) { e.title = title; e.notes = notes; }
@@ -500,7 +406,7 @@ function renderDayDetail(dateStr) {
       const alertEl = document.getElementById('day-event-alert');
       setAlert(alertEl, 'info', 'Saving…');
 
-      const res = await apiPostAuthed({ action: 'addEvent', slotId: selectedSlot.id, date: dateStr, type, title, notes });
+      const res = await apiPost({ action: 'addEvent', slotId: selectedSlot.id, date: dateStr, type, title, notes });
       if (res.error) {
         setAlert(alertEl, 'error', res.error);
         return;
@@ -531,12 +437,6 @@ document.getElementById('cal-next').addEventListener('click', () => {
 
 slotSelect.addEventListener('change', () => loadSlot(slotSelect.value));
 
-if (getPin()) {
-  apiPost({ action: 'verifyPin', pin: getPin() }).then(res => {
-    if (res.ok) { isAdmin = true; renderSigninArea(); if (selectedDate) renderDayDetail(selectedDate); }
-  });
-}
-renderSigninArea();
 init();
 </script>
 </body>

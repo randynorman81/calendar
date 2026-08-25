@@ -10,10 +10,10 @@ syncing between periods that share the same lesson.
   same free built-in database Bank Points uses.
 - **Reads/writes** go through one Netlify Function (`netlify/functions/data.js`).
 
-One page, `index.html`. Students pick their period and click a day to see
-what's due. Click "Teacher sign in" (top of the page) and enter the PIN, and
-that same calendar becomes editable in place: click a day to add/edit/delete
-its events, or to set a Friday's A/B type if it hasn't been set yet.
+One page, `index.html`, no login. Pick a period and click a day to see what's
+due, or to add/edit/delete an event, or to set a Friday's A/B type if it
+hasn't been set yet. There's no PIN -- anyone with the link can edit it, by
+design (it's a secondary calendar, not the source of truth Bank Points is).
 
 ## The schedule this is built around
 
@@ -21,8 +21,8 @@ its events, or to set a Friday's A/B type if it hasn't been set yet.
 - **B days** (Tue/Thu, or a Friday set to B): `2B` APCSP, `3B` IST, `4B` EC
 
 Friday doesn't follow a fixed A/B formula (it shifts around holidays), so you
-set it manually, one Friday at a time — click an unset Friday while signed in
-and you'll get a prompt to mark it A or B before you can add an event there.
+set it manually, one Friday at a time — click an unset Friday and you'll get
+a prompt to mark it A or B before you can add an event there.
 
 ## How syncing works
 
@@ -66,13 +66,12 @@ days. Update that list each year from
 
 ## One-time setup
 
-Same as Bank Points and the other class tools:
+Same as Bank Points and the other class tools, minus the PIN step:
 
 1. Push this folder to a new GitHub repo.
 2. In Netlify: **Add new site → Import an existing project** → pick the repo → Deploy.
-3. Set your PIN: **Site configuration → Environment variables** → add `ADMIN_PIN` →
-   **Deploys → Trigger deploy → Deploy site** so the Function picks it up.
-   (Defaults to `1234` if you skip this.)
+
+That's it — no environment variables to set.
 
 ## Local preview
 
@@ -83,6 +82,6 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\serve.ps1 -Port 8091
 ```
 
 Then open `http://localhost:8091/index.html`. Note: anything that calls the
-Function (PIN check, events) won't work locally this way since there's no
-Function running — only real on Netlify. Static layout/markup can still be
-checked locally.
+Function (events, adding/editing) won't work locally this way since there's
+no Function running — only real on Netlify. Static layout/markup can still
+be checked locally.

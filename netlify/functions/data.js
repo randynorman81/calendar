@@ -300,14 +300,8 @@ export default async (req) => {
       }
 
       const action = body.action;
-      const adminPin = process.env.ADMIN_PIN || "1234";
-      if (body.pin !== adminPin) {
-        return ok({ error: "Invalid PIN" });
-      }
 
       switch (action) {
-        case "verifyPin":
-          return ok({ ok: true });
         case "adminEvents":
           return ok(await adminEvents());
         case "addEvent":
