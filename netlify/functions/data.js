@@ -159,7 +159,7 @@ async function publicEvents(slotId) {
   const forSlot = events
     .filter((e) => e.slotId === slotId)
     .sort((a, b) => a.date.localeCompare(b.date))
-    .map((e) => ({ id: e.id, linkId: e.linkId, date: e.date, title: e.title, notes: e.notes || "", type: e.type, synced: linkCounts[e.linkId] > 1 }));
+    .map((e) => ({ id: e.id, slotId: e.slotId, linkId: e.linkId, date: e.date, title: e.title, notes: e.notes || "", type: e.type, synced: linkCounts[e.linkId] > 1 }));
   return { ok: true, slot: { id: slot.id, label: slot.label, course: slot.course }, events: forSlot };
 }
 
