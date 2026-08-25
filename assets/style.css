@@ -6,6 +6,9 @@
   --gray-300: #d6d6d6;
   --gray-500: #8f8f8f;
   --gray-700: #444444;
+  --red: #c8102e;
+  --blue: #1d4ed8;
+  --yellow-light: #fff3b0;
   --border: #111111;
   --radius: 8px;
   font-family: "Segoe UI", -apple-system, BlinkMacSystemFont, Roboto, Helvetica, Arial, sans-serif;
@@ -410,11 +413,11 @@ footer.site-footer {
 .calendar-cell.has-events { background: var(--gray-100); }
 
 .calendar-cell.selected {
-  background: var(--black);
-  color: var(--white);
+  background: var(--yellow-light);
   border-color: var(--black);
+  border-width: 2px;
 }
-.calendar-cell.selected .cell-num { color: var(--white); }
+.calendar-cell.selected .cell-num { color: var(--black); }
 
 .cell-num { font-size: 0.9rem; font-weight: 600; }
 
@@ -424,12 +427,10 @@ footer.site-footer {
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: var(--black);
 }
-.calendar-cell.selected .event-dot { background: var(--white); }
+.event-dot-assignment { background: var(--black); }
 .event-dot-quiz { background: var(--red); }
-.calendar-cell.selected .event-dot-quiz { background: var(--red); }
-.event-dot-test { background: var(--black); }
+.event-dot-test { background: var(--blue); }
 
 .calendar-legend {
   display: flex;
@@ -451,6 +452,26 @@ footer.site-footer {
 .legend-meets { border: 1.5px solid var(--black); }
 .legend-event { background: var(--gray-100); border: 1.5px solid var(--gray-300); }
 .legend-holiday { background: var(--gray-100); border: 1.5px dashed var(--gray-300); }
+
+.type-legend {
+  display: flex;
+  gap: 18px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--gray-200);
+  font-size: 0.8rem;
+  color: var(--gray-700);
+}
+
+.type-legend span { display: inline-flex; align-items: center; gap: 6px; }
+
+.type-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  display: inline-block;
+}
 
 @media (max-width: 560px) {
   .calendar-cell { min-height: 36px; }
