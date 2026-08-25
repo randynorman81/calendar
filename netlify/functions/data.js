@@ -150,10 +150,16 @@ async function publicEvents(slotId) {
   const slot = slotById(slotId);
   if (!slot) return { error: "Unknown period" };
   const events = await readJSON("events", []);
+
+  // Computed against the *full* cross-slot list, since a synced pair's
+  // partner lives in a different slot than the one being requested here.
+  const linkCounts = {};
+  events.forEach((e) => { linkCounts[e.linkId] = (linkCounts[e.linkId] || 0) + 1; });
+
   const forSlot = events
     .filter((e) => e.slotId === slotId)
     .sort((a, b) => a.date.localeCompare(b.date))
-    .map((e) => ({ id: e.id, date: e.date, title: e.title, notes: e.notes || "", type: e.type }));
+    .map((e) => ({ id: e.id, linkId: e.linkId, date: e.date, title: e.title, notes: e.notes || "", type: e.type, synced: linkCounts[e.linkId] > 1 }));
   return { ok: true, slot: { id: slot.id, label: slot.label, course: slot.course }, events: forSlot };
 }
 

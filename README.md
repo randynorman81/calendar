@@ -10,9 +10,10 @@ syncing between periods that share the same lesson.
   same free built-in database Bank Points uses.
 - **Reads/writes** go through one Netlify Function (`netlify/functions/data.js`).
 
-Two pages:
-- `index.html` — public view. Students pick their period and see upcoming events.
-- `admin.html` — PIN-protected page where you set Friday A/B days and add/edit/delete events.
+One page, `index.html`. Students pick their period and click a day to see
+what's due. Click "Teacher sign in" (top of the page) and enter the PIN, and
+that same calendar becomes editable in place: click a day to add/edit/delete
+its events, or to set a Friday's A/B type if it hasn't been set yet.
 
 ## The schedule this is built around
 
@@ -20,7 +21,8 @@ Two pages:
 - **B days** (Tue/Thu, or a Friday set to B): `2B` APCSP, `3B` IST, `4B` EC
 
 Friday doesn't follow a fixed A/B formula (it shifts around holidays), so you
-set it manually in the admin page, one Friday at a time.
+set it manually, one Friday at a time — click an unset Friday while signed in
+and you'll get a prompt to mark it A or B before you can add an event there.
 
 ## How syncing works
 
@@ -80,7 +82,7 @@ No Node/Python needed — run the included PowerShell static server:
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\serve.ps1 -Port 8091
 ```
 
-Then open `http://localhost:8091/index.html`. Note: the admin/public pages
-that call the Function (PIN check, events) won't work locally this way since
-there's no Function running — only real on Netlify. Static layout/markup can
-still be checked locally.
+Then open `http://localhost:8091/index.html`. Note: anything that calls the
+Function (PIN check, events) won't work locally this way since there's no
+Function running — only real on Netlify. Static layout/markup can still be
+checked locally.

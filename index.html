@@ -9,12 +9,29 @@
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Special+Elite&display=swap">
 <link rel="stylesheet" href="assets/style.css">
 <link rel="icon" href="assets/logo.png">
+<style>
+  .synced-badge {
+    display: inline-block;
+    font-size: 0.68rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    padding: 2px 8px;
+    border-radius: 999px;
+    border: 1px solid var(--black);
+    color: var(--white);
+    background: var(--black);
+    margin-left: 6px;
+  }
+  .signin-inline { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .signin-inline input { max-width: 140px; }
+</style>
 </head>
 <body>
 
 <header class="site-header">
   <div class="header-inner">
-    <a href="index.html" class="brand">
+    <a href="https://computer-sciencenorman.netlify.app/" class="brand">
       <img src="assets/logo.png" alt="Social Circle High School logo" class="school-logo">
       <span class="brand-text">
         <p class="brand-eyebrow">SCHS Computer Science</p>
@@ -22,7 +39,7 @@
       </span>
     </a>
     <div class="header-actions">
-      <a class="btn btn-ghost" href="admin.html">Teacher Admin</a>
+      <a class="btn btn-ghost" href="https://computer-sciencenorman.netlify.app/">&larr; CS Home</a>
     </div>
   </div>
 </header>
@@ -39,6 +56,12 @@
       <select id="slot-select">
         <option value="">Choose a period&hellip;</option>
       </select>
+    </div>
+  </div>
+
+  <div class="card" id="teacher-card">
+    <div id="signin-area">
+      <a href="#" id="signin-toggle" class="hint" style="text-decoration:underline;">Teacher sign in</a>
     </div>
   </div>
 
@@ -74,9 +97,27 @@ function escapeHtml(str) {
   return div.innerHTML;
 }
 
-const TYPE_LABEL = { quiz: 'Quiz', test: 'Test', assignment: 'Assignment' };
+function setAlert(el, kind, msg) {
+  el.innerHTML = msg ? `<div class="alert alert-${kind}">${escapeHtml(msg)}</div>` : '';
+}
+
+const PIN_KEY = 'classCalendarPin';
+function getPin() { return sessionStorage.getItem(PIN_KEY) || ''; }
+
+async function apiPostAuthed(payload) {
+  const res = await apiPost(Object.assign({}, payload, { pin: getPin() }));
+  if (res.error === 'Invalid PIN') {
+    sessionStorage.removeItem(PIN_KEY);
+    isAdmin = false;
+    renderSigninArea();
+    if (selectedDate) renderDayDetail(selectedDate);
+  }
+  return res;
+}
+
 const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 const MONTH_NAMES = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+const TYPE_LABEL = { quiz: 'Quiz', test: 'Test', assignment: 'Assignment' };
 
 function pad2(n) { return String(n).padStart(2, '0'); }
 function toDateStr(y, m, d) { return `${y}-${pad2(m + 1)}-${pad2(d)}`; }
@@ -88,7 +129,6 @@ function formatDateLong(dateStr) {
   const [y, m, d] = dateStr.split('-').map(Number);
   return new Date(y, m - 1, d).toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' });
 }
-
 function slotMeetsOnDate(slot, dateStr, fridayTypes, holidays) {
   if (holidays.has(dateStr)) return false;
   const wd = weekdayName(dateStr);
@@ -107,17 +147,63 @@ const calendarCard = document.getElementById('calendar-card');
 const calendarGrid = document.getElementById('calendar-grid');
 const monthLabel = document.getElementById('cal-month-label');
 const dayDetail = document.getElementById('day-detail');
+const signinArea = document.getElementById('signin-area');
 
 let SLOTS = [];
-let currentSlot = null;
+let selectedSlot = null;
 let currentEvents = [];
 let fridayTypes = {};
 let holidays = new Set();
 let selectedDate = null;
+let isAdmin = false;
 
 const today = new Date();
 let viewYear = today.getFullYear();
 let viewMonth = today.getMonth();
+
+function renderSigninArea() {
+  if (isAdmin) {
+    signinArea.innerHTML = `<span class="hint">Signed in as teacher &middot; <a href="#" id="signout-link" style="text-decoration:underline;">Sign out</a></span>`;
+    document.getElementById('signout-link').addEventListener('click', (e) => {
+      e.preventDefault();
+      sessionStorage.removeItem(PIN_KEY);
+      isAdmin = false;
+      renderSigninArea();
+      if (selectedDate) renderDayDetail(selectedDate);
+    });
+  } else {
+    signinArea.innerHTML = `<a href="#" id="signin-toggle" class="hint" style="text-decoration:underline;">Teacher sign in</a>`;
+    document.getElementById('signin-toggle').addEventListener('click', (e) => {
+      e.preventDefault();
+      signinArea.innerHTML = `
+        <form class="signin-inline" id="pin-form">
+          <input type="password" id="pin-input" inputmode="numeric" autocomplete="off" placeholder="PIN" required>
+          <button type="submit" class="btn btn-sm btn-primary">Unlock</button>
+        </form>
+        <div id="pin-alert"></div>
+      `;
+      document.getElementById('pin-form').addEventListener('submit', async (ev) => {
+        ev.preventDefault();
+        const pin = document.getElementById('pin-input').value.trim();
+        const alertEl = document.getElementById('pin-alert');
+        setAlert(alertEl, 'info', 'Checking…');
+        try {
+          const res = await apiPost({ action: 'verifyPin', pin });
+          if (res.ok) {
+            sessionStorage.setItem(PIN_KEY, pin);
+            isAdmin = true;
+            renderSigninArea();
+            if (selectedDate) renderDayDetail(selectedDate);
+          } else {
+            setAlert(alertEl, 'error', res.error || 'Incorrect PIN.');
+          }
+        } catch (err) {
+          setAlert(alertEl, 'error', 'Could not reach the server.');
+        }
+      });
+    });
+  }
+}
 
 async function loadSlots() {
   const res = await apiGet('slots');
@@ -138,7 +224,8 @@ async function loadSlots() {
 async function loadSlot(slotId) {
   if (!slotId) { calendarCard.style.display = 'none'; dayDetail.innerHTML = ''; return; }
   sessionStorage.setItem('calendarSlot', slotId);
-  currentSlot = SLOTS.find(s => s.id === slotId);
+  selectedSlot = SLOTS.find(s => s.id === slotId);
+  selectedDate = null;
   dayDetail.innerHTML = '<div class="loading">Loading&hellip;</div>';
 
   try {
@@ -156,7 +243,6 @@ async function loadSlot(slotId) {
     holidays = new Set(holidaysRes.holidays || []);
     dayDetail.innerHTML = '';
 
-    // Jump to the month of the nearest upcoming event, or today if none.
     const todayStr = toDateStr(today.getFullYear(), today.getMonth(), today.getDate());
     const upcoming = currentEvents.find(e => e.date >= todayStr);
     const anchor = upcoming ? upcoming.date : todayStr;
@@ -172,7 +258,10 @@ async function loadSlot(slotId) {
 }
 
 function eventsOn(dateStr) {
-  return currentEvents.filter(e => e.date === dateStr);
+  // currentEvents can briefly contain another slot's events too -- a sync
+  // pair's mirrored copy lands in currentEvents right after an add so the
+  // "synced" badge can work, even though it belongs to a different period.
+  return currentEvents.filter(e => e.date === dateStr && e.slotId === selectedSlot.id);
 }
 
 function renderCalendar() {
@@ -190,7 +279,7 @@ function renderCalendar() {
 
   for (let day = 1; day <= daysInMonth; day++) {
     const dStr = toDateStr(viewYear, viewMonth, day);
-    const meets = currentSlot ? slotMeetsOnDate(currentSlot, dStr, fridayTypes, holidays) : false;
+    const meets = selectedSlot ? slotMeetsOnDate(selectedSlot, dStr, fridayTypes, holidays) : false;
     const isHoliday = holidays.has(dStr);
     const dayEvents = eventsOn(dStr);
     const classes = ['calendar-cell'];
@@ -220,34 +309,183 @@ function renderCalendar() {
   if (selectedDate) renderDayDetail(selectedDate);
 }
 
-function renderDayDetail(dateStr) {
-  const meets = currentSlot ? slotMeetsOnDate(currentSlot, dateStr, fridayTypes, holidays) : false;
-  const isHoliday = holidays.has(dateStr);
-  const dayEvents = eventsOn(dateStr);
+function slotLabel(id) {
+  const s = SLOTS.find(x => x.id === id);
+  return s ? `${s.label} (${s.dayType}-day)` : id;
+}
 
-  let statusLine;
-  if (isHoliday) {
-    statusLine = '<p class="hint">No school today.</p>';
-  } else if (!meets) {
-    statusLine = `<p class="hint">${escapeHtml(currentSlot.label)} doesn't meet today.</p>`;
-  } else if (dayEvents.length === 0) {
-    statusLine = '<p class="hint">Nothing scheduled.</p>';
-  } else {
-    statusLine = '';
+function renderDayDetail(dateStr) {
+  const isHoliday = holidays.has(dateStr);
+  const isFriday = weekdayName(dateStr) === 'Friday';
+  const fridayUnset = isFriday && !isHoliday && !fridayTypes[dateStr];
+  const meets = selectedSlot ? slotMeetsOnDate(selectedSlot, dateStr, fridayTypes, holidays) : false;
+  const dayEvents = eventsOn(dateStr).filter(e => e.slotId === selectedSlot.id);
+
+  // Teacher view: manage everything inline. Student view: read-only.
+  if (!isAdmin) {
+    let statusLine;
+    if (isHoliday) statusLine = '<p class="hint">No school today.</p>';
+    else if (fridayUnset) statusLine = '<p class="hint">This Friday\'s schedule hasn\'t been posted yet &mdash; check with your teacher.</p>';
+    else if (!meets) statusLine = `<p class="hint">${escapeHtml(selectedSlot.label)} doesn't meet today.</p>`;
+    else if (dayEvents.length === 0) statusLine = '<p class="hint">Nothing scheduled.</p>';
+    else statusLine = '';
+
+    dayDetail.innerHTML = `
+      <div class="card">
+        <h2 style="margin-top:0;">${formatDateLong(dateStr)}</h2>
+        ${statusLine}
+        ${dayEvents.map(e => `
+          <div class="note">
+            <strong>${escapeHtml(TYPE_LABEL[e.type] || 'Assignment')}:</strong> ${escapeHtml(e.title)}
+            ${e.notes ? `<div class="hint" style="margin-top:4px;">${escapeHtml(e.notes)}</div>` : ''}
+          </div>
+        `).join('')}
+      </div>
+    `;
+    return;
   }
+
+  // --- Admin (signed-in) view below ---
+
+  let fridayPrompt = '';
+  if (fridayUnset) {
+    fridayPrompt = `
+      <div class="alert alert-warning">
+        This Friday's A/B type hasn't been set yet.
+        <div class="row-actions" style="margin-top:8px;">
+          <button class="btn btn-sm" data-friday-type="A">Mark as A day</button>
+          <button class="btn btn-sm" data-friday-type="B">Mark as B day</button>
+        </div>
+      </div>
+    `;
+  }
+
+  let blockedNote = '';
+  if (!fridayUnset) {
+    if (isHoliday) blockedNote = '<div class="alert alert-warning">No school this day &mdash; can\'t add an event here.</div>';
+    else if (!meets) blockedNote = `<div class="alert alert-warning">${escapeHtml(selectedSlot.label)} doesn't meet this day &mdash; can't add an event here.</div>`;
+  }
+
+  const showAddForm = !fridayUnset && !blockedNote;
 
   dayDetail.innerHTML = `
     <div class="card">
       <h2 style="margin-top:0;">${formatDateLong(dateStr)}</h2>
-      ${statusLine}
-      ${dayEvents.length > 0 ? dayEvents.map(e => `
-        <div class="note">
-          <strong>${escapeHtml(TYPE_LABEL[e.type] || 'Assignment')}:</strong> ${escapeHtml(e.title)}
-          ${e.notes ? `<div class="hint" style="margin-top:4px;">${escapeHtml(e.notes)}</div>` : ''}
-        </div>
-      `).join('') : ''}
+
+      ${fridayPrompt}
+
+      ${dayEvents.map(e => {
+        return `
+          <div class="note">
+            <div class="row-actions" style="justify-content:space-between; align-items:flex-start;">
+              <div>
+                <strong>${escapeHtml(TYPE_LABEL[e.type] || 'Assignment')}:</strong> ${escapeHtml(e.title)}${e.synced ? '<span class="synced-badge">synced</span>' : ''}
+                ${e.notes ? `<div class="hint" style="margin-top:4px;">${escapeHtml(e.notes)}</div>` : ''}
+              </div>
+              <div class="row-actions">
+                <button class="btn btn-sm" data-edit="${e.id}">Edit</button>
+                <button class="btn btn-sm btn-danger" data-delete="${e.id}">Delete</button>
+              </div>
+            </div>
+          </div>
+        `;
+      }).join('')}
+
+      ${blockedNote}
+
+      ${showAddForm ? `
+        <h3 style="margin-bottom:8px;">Add an event to this day</h3>
+        <form class="stack" id="day-event-form">
+          <div class="field-row">
+            <div class="field">
+              <label for="day-event-type">Type</label>
+              <select id="day-event-type">
+                <option value="assignment">Assignment</option>
+                <option value="quiz">Quiz</option>
+                <option value="test">Test</option>
+              </select>
+            </div>
+          </div>
+          <div class="field">
+            <label for="day-event-title">Title</label>
+            <input type="text" id="day-event-title" required placeholder="e.g. 1.2 CIA Triad Quiz">
+          </div>
+          <div class="field">
+            <label for="day-event-notes">Notes (optional)</label>
+            <textarea id="day-event-notes" rows="2"></textarea>
+          </div>
+          <button type="submit" class="btn btn-primary" style="align-self:flex-start;">Add Event</button>
+        </form>
+        <div id="day-event-alert"></div>
+      ` : ''}
     </div>
   `;
+
+  dayDetail.querySelectorAll('[data-friday-type]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const type = btn.dataset.fridayType;
+      const res = await apiPostAuthed({ action: 'setFridayType', date: dateStr, type });
+      if (res.error) { alert(res.error); return; }
+      fridayTypes[dateStr] = type;
+      renderCalendar();
+      renderDayDetail(dateStr);
+    });
+  });
+
+  dayDetail.querySelectorAll('[data-delete]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      if (!confirm('Delete this event? If it\'s synced, its linked copy will be deleted too.')) return;
+      const target = currentEvents.find(x => x.id === btn.dataset.delete);
+      const res = await apiPostAuthed({ action: 'deleteEvent', id: btn.dataset.delete });
+      if (res.error) { alert(res.error); return; }
+      currentEvents = currentEvents.filter(e => e.linkId !== target.linkId);
+      renderCalendar();
+      renderDayDetail(dateStr);
+    });
+  });
+  dayDetail.querySelectorAll('[data-edit]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const ev = currentEvents.find(x => x.id === btn.dataset.edit);
+      const title = prompt('Title', ev.title);
+      if (title === null) return;
+      const notes = prompt('Notes', ev.notes || '');
+      if (notes === null) return;
+      const res = await apiPostAuthed({ action: 'editEvent', id: ev.id, title, notes });
+      if (res.error) { alert(res.error); return; }
+      currentEvents.forEach(e => {
+        if (e.linkId === ev.linkId) { e.title = title; e.notes = notes; }
+      });
+      renderCalendar();
+      renderDayDetail(dateStr);
+    });
+  });
+
+  const dayForm = document.getElementById('day-event-form');
+  if (dayForm) {
+    dayForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const type = document.getElementById('day-event-type').value;
+      const title = document.getElementById('day-event-title').value.trim();
+      const notes = document.getElementById('day-event-notes').value.trim();
+      const alertEl = document.getElementById('day-event-alert');
+      setAlert(alertEl, 'info', 'Saving…');
+
+      const res = await apiPostAuthed({ action: 'addEvent', slotId: selectedSlot.id, date: dateStr, type, title, notes });
+      if (res.error) {
+        setAlert(alertEl, 'error', res.error);
+        return;
+      }
+
+      const synced = res.created.length > 1;
+      const extra = synced
+        ? ` Also added to: ${res.created.slice(1).map(c => `${slotLabel(c.slotId)} on ${formatDateLong(c.date)}`).join(', ')}.`
+        : '';
+      currentEvents = currentEvents.concat(res.created.map(c => Object.assign({ synced }, c)));
+      renderCalendar();
+      renderDayDetail(dateStr);
+      setAlert(document.getElementById('day-event-alert'), 'success', `Added.${extra}`);
+    });
+  }
 }
 
 document.getElementById('cal-prev').addEventListener('click', () => {
@@ -261,10 +499,14 @@ document.getElementById('cal-next').addEventListener('click', () => {
   renderCalendar();
 });
 
-slotSelect.addEventListener('change', () => {
-  selectedDate = null;
-  loadSlot(slotSelect.value);
-});
+slotSelect.addEventListener('change', () => loadSlot(slotSelect.value));
+
+if (getPin()) {
+  apiPost({ action: 'verifyPin', pin: getPin() }).then(res => {
+    if (res.ok) { isAdmin = true; renderSigninArea(); if (selectedDate) renderDayDetail(selectedDate); }
+  });
+}
+renderSigninArea();
 loadSlots();
 </script>
 </body>
