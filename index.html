@@ -38,6 +38,7 @@
     </a>
     <div class="header-actions">
       <a class="btn btn-ghost" href="https://computer-sciencenorman.netlify.app/">&larr; CS Home</a>
+      <button type="button" class="btn btn-ghost" id="admin-toggle-btn">Admin</button>
     </div>
   </div>
 </header>
@@ -45,7 +46,7 @@
 <main>
   <div class="hero">
     <h2>Find your class period</h2>
-    <p>Pick your period, then click any day to see what's due &mdash; or add, edit, or delete an event right there.</p>
+    <p>Pick your period, then click any day to see what's on it.</p>
   </div>
 
   <div class="card">
@@ -81,7 +82,8 @@
     </div>
   </div>
 
-  <div id="day-detail"></div>
+  <div id="day-modal-root"></div>
+  <div id="pin-modal-root"></div>
 </main>
 
 <footer class="site-footer">
@@ -99,6 +101,12 @@ function escapeHtml(str) {
 function setAlert(el, kind, msg) {
   el.innerHTML = msg ? `<div class="alert alert-${kind}">${escapeHtml(msg)}</div>` : '';
 }
+
+// Viewing the calendar is fully public -- only adding/editing/deleting
+// requires this PIN, checked server-side on every mutating call.
+const PIN_KEY = 'calendarPin';
+function getPin() { return sessionStorage.getItem(PIN_KEY) || ''; }
+function isAdmin() { return !!getPin(); }
 
 const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 const MONTH_NAMES = ["January","February","March","April","May","June","July","August","September","October","November","December"];
@@ -130,7 +138,7 @@ function slotMeetsOnDate(slot, dateStr, fridayTypes, holidays) {
 const slotSelect = document.getElementById('slot-select');
 const calendarGrid = document.getElementById('calendar-grid');
 const monthLabel = document.getElementById('cal-month-label');
-const dayDetail = document.getElementById('day-detail');
+const dayModalRoot = document.getElementById('day-modal-root');
 
 let SLOTS = [];
 let selectedSlot = null;
@@ -166,6 +174,7 @@ async function init() {
     holidays = new Set(holidaysRes.holidays || []);
 
     renderCalendar();
+    updateAdminButton();
 
     const saved = sessionStorage.getItem('calendarSlot');
     if (saved && SLOTS.some(s => s.id === saved)) {
@@ -173,7 +182,7 @@ async function init() {
       loadSlot(saved);
     }
   } catch (err) {
-    dayDetail.innerHTML = '<div class="alert alert-error">Could not reach the server. This page needs to be running on Netlify (with functions deployed) to work.</div>';
+    alert('Could not reach the server. This page needs to be running on Netlify (with functions deployed) to work.');
   }
 }
 
@@ -182,8 +191,8 @@ async function loadSlot(slotId) {
     sessionStorage.removeItem('calendarSlot');
     selectedSlot = null;
     currentEvents = [];
+    closeDayModal();
     renderCalendar();
-    if (selectedDate) renderDayDetail(selectedDate);
     return;
   }
   sessionStorage.setItem('calendarSlot', slotId);
@@ -193,13 +202,12 @@ async function loadSlot(slotId) {
   // details (or the wrong month entirely) for events that actually landed
   // on this period's own dates, most visibly right after a sync-created
   // event on a different month than the one currently in view.
-  selectedDate = null;
-  dayDetail.innerHTML = '<p class="hint">Click any day to see what\'s due.</p>';
+  closeDayModal();
 
   try {
     const eventsRes = await apiGet('publicEvents', { slot: slotId });
     if (eventsRes.error) {
-      dayDetail.innerHTML = `<div class="alert alert-error">${escapeHtml(eventsRes.error)}</div>`;
+      alert(eventsRes.error);
       return;
     }
     currentEvents = eventsRes.events;
@@ -213,7 +221,7 @@ async function loadSlot(slotId) {
 
     renderCalendar();
   } catch (err) {
-    dayDetail.innerHTML = '<div class="alert alert-error">Could not reach the server. This page needs to be running on Netlify (with functions deployed) to work.</div>';
+    alert('Could not reach the server. This page needs to be running on Netlify (with functions deployed) to work.');
   }
 }
 
@@ -276,12 +284,9 @@ function renderCalendar() {
     cell.addEventListener('click', () => {
       selectedDate = cell.dataset.date;
       renderCalendar();
-      renderDayDetail(selectedDate);
-      dayDetail.scrollIntoView({ block: 'start' });
+      openDayModal(selectedDate);
     });
   });
-
-  if (selectedDate) renderDayDetail(selectedDate);
 }
 
 function slotLabel(id) {
@@ -289,12 +294,25 @@ function slotLabel(id) {
   return s ? `${s.label} (${s.dayType}-day)` : id;
 }
 
-function renderDayDetail(dateStr) {
+function closeDayModal() {
+  selectedDate = null;
+  dayModalRoot.innerHTML = '';
+  renderCalendar();
+}
+
+// The calendar itself is fully public -- anyone can pick a period and see
+// what's on a day. Only an unlocked admin session (see openPinModal) gets
+// the Friday-type buttons, Edit/Delete, and the add-event form; everyone
+// else just sees a clean read-only list of that day's dots.
+function openDayModal(dateStr) {
   if (!selectedSlot) {
-    dayDetail.innerHTML = `
-      <div class="card">
-        <h2 style="margin-top:0;">${formatDateLong(dateStr)}</h2>
-        <p class="hint">Pick your period above to see what's due this day.</p>
+    dayModalRoot.innerHTML = `
+      <div class="modal-backdrop" onclick="if(event.target===this) closeDayModal()">
+        <div class="modal" style="max-width:480px;">
+          <h3>${formatDateLong(dateStr)}</h3>
+          <p class="hint">Pick your period above to see what's on this day.</p>
+          <div class="modal-actions"><button class="btn btn-sm" onclick="closeDayModal()">Close</button></div>
+        </div>
       </div>
     `;
     return;
@@ -306,9 +324,10 @@ function renderDayDetail(dateStr) {
   const meets = slotMeetsOnDate(selectedSlot, dateStr, fridayTypes, holidays);
   const dayEvents = eventsOn(dateStr);
   const dayDueEvents = dueEventsOn(dateStr);
+  const admin = isAdmin();
 
   let fridayPrompt = '';
-  if (fridayUnset) {
+  if (admin && fridayUnset) {
     fridayPrompt = `
       <div class="alert alert-warning">
         This Friday's A/B type hasn't been set yet.
@@ -321,101 +340,111 @@ function renderDayDetail(dateStr) {
   }
 
   let blockedNote = '';
-  if (!fridayUnset) {
+  if (admin && !fridayUnset) {
     if (isHoliday) blockedNote = '<div class="alert alert-warning">No school this day &mdash; can\'t add an event here.</div>';
     else if (!meets) blockedNote = `<div class="alert alert-warning">${escapeHtml(selectedSlot.label)} doesn't meet this day &mdash; can't add an event here.</div>`;
   }
 
-  const showAddForm = !fridayUnset && !blockedNote;
+  const showAddForm = admin && !fridayUnset && !blockedNote;
 
-  dayDetail.innerHTML = `
-    <div class="card">
-      <h2 style="margin-top:0;">${formatDateLong(dateStr)}</h2>
-
-      ${fridayPrompt}
-
-      ${dayDueEvents.length > 0 ? `
-        <div class="alert alert-warning" style="border-color: var(--pink);">
-          <strong>Due today:</strong> ${dayDueEvents.map(e => escapeHtml(e.title)).join(', ')}
+  dayModalRoot.innerHTML = `
+    <div class="modal-backdrop" onclick="if(event.target===this) closeDayModal()">
+      <div class="modal" style="max-width:520px; max-height:88vh; overflow-y:auto;">
+        <div class="row-actions" style="justify-content:space-between; align-items:flex-start;">
+          <h3 style="margin-bottom:4px;">${formatDateLong(dateStr)}</h3>
+          <button class="btn btn-sm" onclick="closeDayModal()" aria-label="Close">&times;</button>
         </div>
-      ` : ''}
 
-      ${dayEvents.map(e => {
-        return `
-          <div class="note">
-            <div class="row-actions" style="justify-content:space-between; align-items:flex-start;">
-              <div>
-                <strong>${escapeHtml(TYPE_LABEL[e.type] || 'Assignment')}:</strong> ${escapeHtml(e.title)}${e.synced ? '<span class="synced-badge">synced</span>' : ''}
-                ${e.notes ? `<div class="hint" style="margin-top:4px;">${escapeHtml(e.notes)}</div>` : ''}
-                ${e.dueDate && e.dueDate !== e.date ? `<div class="hint" style="margin-top:4px; color: var(--pink);">Due ${formatDateLong(e.dueDate)}</div>` : ''}
+        ${fridayPrompt}
+
+        ${dayDueEvents.length > 0 ? `
+          <div class="alert alert-warning" style="border-color: var(--pink);">
+            <strong>Due today:</strong> ${dayDueEvents.map(e => escapeHtml(e.title)).join(', ')}
+          </div>
+        ` : ''}
+
+        ${dayEvents.length === 0 && dayDueEvents.length === 0 ? '<p class="hint">Nothing on the calendar this day.</p>' : ''}
+
+        ${dayEvents.map(e => {
+          return `
+            <div class="note">
+              <div class="row-actions" style="justify-content:space-between; align-items:flex-start;">
+                <div>
+                  <span class="event-dot event-dot-${e.type}" style="display:inline-block; margin-right:6px;"></span>
+                  <strong>${escapeHtml(TYPE_LABEL[e.type] || 'Assignment')}:</strong> ${escapeHtml(e.title)}${e.synced ? '<span class="synced-badge">synced</span>' : ''}
+                  ${e.notes ? `<div class="hint" style="margin-top:4px;">${escapeHtml(e.notes)}</div>` : ''}
+                  ${e.dueDate && e.dueDate !== e.date ? `<div class="hint" style="margin-top:4px; color: var(--pink);">Due ${formatDateLong(e.dueDate)}</div>` : ''}
+                </div>
+                ${admin ? `
+                  <div class="row-actions">
+                    <button class="btn btn-sm" data-edit="${e.id}">Edit</button>
+                    <button class="btn btn-sm btn-danger" data-delete="${e.id}">Delete</button>
+                  </div>
+                ` : ''}
               </div>
-              <div class="row-actions">
-                <button class="btn btn-sm" data-edit="${e.id}">Edit</button>
-                <button class="btn btn-sm btn-danger" data-delete="${e.id}">Delete</button>
+            </div>
+          `;
+        }).join('')}
+
+        ${blockedNote}
+
+        ${!admin ? '' : showAddForm ? `
+          <h3 style="margin-bottom:8px;">Add an event to this day</h3>
+          <form class="stack" id="day-event-form">
+            <div class="field-row">
+              <div class="field">
+                <label for="day-event-type">Type</label>
+                <select id="day-event-type">
+                  <option value="assignment">Assignment</option>
+                  <option value="quiz">Quiz</option>
+                  <option value="test">Test</option>
+                  <option value="note">Note</option>
+                </select>
+              </div>
+              <div class="field">
+                <label for="day-event-due">Due date (optional)</label>
+                <input type="date" id="day-event-due">
               </div>
             </div>
-          </div>
-        `;
-      }).join('')}
-
-      ${blockedNote}
-
-      ${showAddForm ? `
-        <h3 style="margin-bottom:8px;">Add an event to this day</h3>
-        <form class="stack" id="day-event-form">
-          <div class="field-row">
             <div class="field">
-              <label for="day-event-type">Type</label>
-              <select id="day-event-type">
-                <option value="assignment">Assignment</option>
-                <option value="quiz">Quiz</option>
-                <option value="test">Test</option>
-                <option value="note">Note</option>
-              </select>
+              <label for="day-event-title">Title</label>
+              <input type="text" id="day-event-title" required placeholder="e.g. 1.2 CIA Triad Quiz">
             </div>
             <div class="field">
-              <label for="day-event-due">Due date (optional)</label>
-              <input type="date" id="day-event-due">
+              <label for="day-event-notes">Notes (optional)</label>
+              <textarea id="day-event-notes" rows="2"></textarea>
             </div>
-          </div>
-          <div class="field">
-            <label for="day-event-title">Title</label>
-            <input type="text" id="day-event-title" required placeholder="e.g. 1.2 CIA Triad Quiz">
-          </div>
-          <div class="field">
-            <label for="day-event-notes">Notes (optional)</label>
-            <textarea id="day-event-notes" rows="2"></textarea>
-          </div>
-          <button type="submit" class="btn btn-primary" style="align-self:flex-start;">Add Event</button>
-        </form>
-        <div id="day-event-alert"></div>
-      ` : ''}
+            <button type="submit" class="btn btn-primary" style="align-self:flex-start;">Add Event</button>
+          </form>
+          <div id="day-event-alert"></div>
+        ` : ''}
+      </div>
     </div>
   `;
 
-  dayDetail.querySelectorAll('[data-friday-type]').forEach(btn => {
+  const modalRoot = dayModalRoot;
+
+  modalRoot.querySelectorAll('[data-friday-type]').forEach(btn => {
     btn.addEventListener('click', async () => {
       const type = btn.dataset.fridayType;
-      const res = await apiPost({ action: 'setFridayType', date: dateStr, type });
-      if (res.error) { alert(res.error); return; }
+      const res = await apiPost({ action: 'setFridayType', date: dateStr, type, pin: getPin() });
+      if (!handleAdminResult(res)) return;
       fridayTypes[dateStr] = type;
-      renderCalendar();
-      renderDayDetail(dateStr);
+      openDayModal(dateStr);
     });
   });
 
-  dayDetail.querySelectorAll('[data-delete]').forEach(btn => {
+  modalRoot.querySelectorAll('[data-delete]').forEach(btn => {
     btn.addEventListener('click', async () => {
       if (!confirm('Delete this event? If it\'s synced, its linked copy will be deleted too.')) return;
       const target = currentEvents.find(x => x.id === btn.dataset.delete);
-      const res = await apiPost({ action: 'deleteEvent', id: btn.dataset.delete });
-      if (res.error) { alert(res.error); return; }
+      const res = await apiPost({ action: 'deleteEvent', id: btn.dataset.delete, pin: getPin() });
+      if (!handleAdminResult(res)) return;
       currentEvents = currentEvents.filter(e => e.linkId !== target.linkId);
-      renderCalendar();
-      renderDayDetail(dateStr);
+      openDayModal(dateStr);
     });
   });
-  dayDetail.querySelectorAll('[data-edit]').forEach(btn => {
+  modalRoot.querySelectorAll('[data-edit]').forEach(btn => {
     btn.addEventListener('click', async () => {
       const ev = currentEvents.find(x => x.id === btn.dataset.edit);
       const title = prompt('Title', ev.title);
@@ -425,13 +454,12 @@ function renderDayDetail(dateStr) {
       const dueDate = prompt('Due date (YYYY-MM-DD, leave blank for none)', ev.dueDate || '');
       if (dueDate === null) return;
       if (dueDate && !/^\d{4}-\d{2}-\d{2}$/.test(dueDate)) { alert('Due date must be in YYYY-MM-DD format.'); return; }
-      const res = await apiPost({ action: 'editEvent', id: ev.id, title, notes, dueDate });
-      if (res.error) { alert(res.error); return; }
+      const res = await apiPost({ action: 'editEvent', id: ev.id, title, notes, dueDate, pin: getPin() });
+      if (!handleAdminResult(res)) return;
       currentEvents.forEach(e => {
         if (e.linkId === ev.linkId) { e.title = title; e.notes = notes; e.dueDate = dueDate || null; }
       });
-      renderCalendar();
-      renderDayDetail(dateStr);
+      openDayModal(dateStr);
     });
   });
 
@@ -446,7 +474,8 @@ function renderDayDetail(dateStr) {
       const alertEl = document.getElementById('day-event-alert');
       setAlert(alertEl, 'info', 'Saving…');
 
-      const res = await apiPost({ action: 'addEvent', slotId: selectedSlot.id, date: dateStr, dueDate, type, title, notes });
+      const res = await apiPost({ action: 'addEvent', slotId: selectedSlot.id, date: dateStr, dueDate, type, title, notes, pin: getPin() });
+      if (res.error === 'Invalid PIN') { handleAdminResult(res); return; }
       if (res.error) {
         setAlert(alertEl, 'error', res.error);
         return;
@@ -457,12 +486,91 @@ function renderDayDetail(dateStr) {
         ? ` Also added to: ${res.created.slice(1).map(c => `${slotLabel(c.slotId)} on ${formatDateLong(c.date)}`).join(', ')}.`
         : '';
       currentEvents = currentEvents.concat(res.created.map(c => Object.assign({ synced }, c)));
-      renderCalendar();
-      renderDayDetail(dateStr);
+      openDayModal(dateStr);
       setAlert(document.getElementById('day-event-alert'), 'success', `Added.${extra}`);
     });
   }
 }
+
+// ---- admin PIN ----
+
+const pinModalRoot = document.getElementById('pin-modal-root');
+const adminToggleBtn = document.getElementById('admin-toggle-btn');
+
+function updateAdminButton() {
+  adminToggleBtn.textContent = isAdmin() ? 'Log Out' : 'Admin';
+}
+
+// Every admin API call sends the PIN; if the server ever says it's wrong
+// (changed PIN, or a stale/cleared session on another tab) this drops back
+// to view-only and asks for it again, instead of leaving broken buttons.
+function handleAdminResult(res) {
+  if (res.error === 'Invalid PIN') {
+    sessionStorage.removeItem(PIN_KEY);
+    updateAdminButton();
+    alert('Your admin session expired. Click Admin to sign back in.');
+    if (selectedDate) openDayModal(selectedDate);
+    return false;
+  }
+  if (res.error) { alert(res.error); return false; }
+  return true;
+}
+
+function closePinModal() {
+  pinModalRoot.innerHTML = '';
+}
+
+function openPinModal() {
+  pinModalRoot.innerHTML = `
+    <div class="modal-backdrop" onclick="if(event.target===this) closePinModal()">
+      <div class="modal">
+        <h3>Admin PIN</h3>
+        <div id="pin-alert"></div>
+        <form class="stack" id="pin-form">
+          <div class="field">
+            <label for="pin-input">PIN</label>
+            <input type="password" id="pin-input" inputmode="numeric" autocomplete="off" required>
+          </div>
+          <div class="modal-actions">
+            <button type="button" class="btn btn-sm" onclick="closePinModal()">Cancel</button>
+            <button type="submit" class="btn btn-primary btn-sm">Unlock</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  `;
+  document.getElementById('pin-input').focus();
+  document.getElementById('pin-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const pin = document.getElementById('pin-input').value.trim();
+    const alertEl = document.getElementById('pin-alert');
+    setAlert(alertEl, 'info', 'Checking…');
+    try {
+      const res = await apiPost({ action: 'verifyPin', pin });
+      if (res.ok) {
+        sessionStorage.setItem(PIN_KEY, pin);
+        updateAdminButton();
+        closePinModal();
+        if (selectedDate) openDayModal(selectedDate);
+      } else {
+        setAlert(alertEl, 'error', 'Incorrect PIN.');
+      }
+    } catch (err) {
+      setAlert(alertEl, 'error', 'Could not reach the server.');
+    }
+  });
+}
+
+adminToggleBtn.addEventListener('click', () => {
+  if (isAdmin()) {
+    if (!confirm('Log out of Admin?')) return;
+    sessionStorage.removeItem(PIN_KEY);
+    updateAdminButton();
+    if (selectedDate) openDayModal(selectedDate);
+  } else {
+    openPinModal();
+  }
+});
 
 document.getElementById('cal-prev').addEventListener('click', () => {
   viewMonth--;

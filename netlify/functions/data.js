@@ -312,6 +312,19 @@ export default async (req) => {
 
       const action = body.action;
 
+      // Viewing is public (see the GET branch above) -- only actions that
+      // change data require the admin PIN, so a casual visitor can see the
+      // calendar but not add/edit/delete anything.
+      if (action === "verifyPin") {
+        const adminPin = process.env.ADMIN_PIN || "1234";
+        return ok({ ok: body.pin === adminPin });
+      }
+
+      const adminPin = process.env.ADMIN_PIN || "1234";
+      if (body.pin !== adminPin) {
+        return ok({ error: "Invalid PIN" });
+      }
+
       switch (action) {
         case "adminEvents":
           return ok(await adminEvents());
