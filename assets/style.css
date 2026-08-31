@@ -8,6 +8,7 @@
   --gray-700: #444444;
   --red: #c8102e;
   --blue: #1d4ed8;
+  --pink: #ec4899;
   --yellow-light: #fff3b0;
   --border: #111111;
   --radius: 8px;
@@ -431,6 +432,7 @@ footer.site-footer {
 .event-dot-assignment { background: var(--black); }
 .event-dot-quiz { background: var(--red); }
 .event-dot-test { background: var(--blue); }
+.event-dot-due { background: var(--pink); }
 
 .calendar-legend {
   display: flex;

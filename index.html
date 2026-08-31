@@ -62,6 +62,7 @@
       <span><span class="type-dot event-dot-assignment"></span> Assignment</span>
       <span><span class="type-dot event-dot-quiz"></span> Quiz</span>
       <span><span class="type-dot event-dot-test"></span> Test</span>
+      <span><span class="type-dot event-dot-due"></span> Due Date</span>
     </div>
     <div class="calendar-header">
       <button type="button" class="btn btn-sm" id="cal-prev">&larr;</button>
@@ -223,6 +224,15 @@ function eventsOn(dateStr) {
   return currentEvents.filter(e => e.date === dateStr && e.slotId === selectedSlot.id);
 }
 
+// Events whose due date falls on this day -- shown as a separate pink dot
+// from the black/red/blue "this is the day we're doing it" dot. Skips
+// events whose due date is the same as their assigned day, since the
+// regular type dot already covers that case.
+function dueEventsOn(dateStr) {
+  if (!selectedSlot) return [];
+  return currentEvents.filter(e => e.dueDate === dateStr && e.dueDate !== e.date && e.slotId === selectedSlot.id);
+}
+
 function renderCalendar() {
   monthLabel.textContent = `${MONTH_NAMES[viewMonth]} ${viewYear}`;
 
@@ -241,17 +251,21 @@ function renderCalendar() {
     const meets = selectedSlot ? slotMeetsOnDate(selectedSlot, dStr, fridayTypes, holidays) : false;
     const isHoliday = holidays.has(dStr);
     const dayEvents = eventsOn(dStr);
+    const dayDueEvents = dueEventsOn(dStr);
     const classes = ['calendar-cell'];
     if (dStr === todayStr) classes.push('today');
     if (meets) classes.push('meets');
     if (isHoliday) classes.push('holiday');
-    if (dayEvents.length > 0) classes.push('has-events');
+    if (dayEvents.length > 0 || dayDueEvents.length > 0) classes.push('has-events');
     if (dStr === selectedDate) classes.push('selected');
+
+    const dots = dayEvents.slice(0, 3).map(e => `<span class="event-dot event-dot-${e.type}"></span>`).join('')
+      + dayDueEvents.slice(0, 3).map(() => `<span class="event-dot event-dot-due"></span>`).join('');
 
     cells += `
       <button type="button" class="${classes.join(' ')}" data-date="${dStr}">
         <span class="cell-num">${day}</span>
-        ${dayEvents.length > 0 ? `<span class="cell-dots">${dayEvents.slice(0, 3).map(e => `<span class="event-dot event-dot-${e.type}"></span>`).join('')}</span>` : ''}
+        ${dots ? `<span class="cell-dots">${dots}</span>` : ''}
       </button>
     `;
   }
@@ -290,6 +304,7 @@ function renderDayDetail(dateStr) {
   const fridayUnset = isFriday && !isHoliday && !fridayTypes[dateStr];
   const meets = slotMeetsOnDate(selectedSlot, dateStr, fridayTypes, holidays);
   const dayEvents = eventsOn(dateStr);
+  const dayDueEvents = dueEventsOn(dateStr);
 
   let fridayPrompt = '';
   if (fridayUnset) {
@@ -318,6 +333,12 @@ function renderDayDetail(dateStr) {
 
       ${fridayPrompt}
 
+      ${dayDueEvents.length > 0 ? `
+        <div class="alert alert-warning" style="border-color: var(--pink);">
+          <strong>Due today:</strong> ${dayDueEvents.map(e => escapeHtml(e.title)).join(', ')}
+        </div>
+      ` : ''}
+
       ${dayEvents.map(e => {
         return `
           <div class="note">
@@ -325,6 +346,7 @@ function renderDayDetail(dateStr) {
               <div>
                 <strong>${escapeHtml(TYPE_LABEL[e.type] || 'Assignment')}:</strong> ${escapeHtml(e.title)}${e.synced ? '<span class="synced-badge">synced</span>' : ''}
                 ${e.notes ? `<div class="hint" style="margin-top:4px;">${escapeHtml(e.notes)}</div>` : ''}
+                ${e.dueDate && e.dueDate !== e.date ? `<div class="hint" style="margin-top:4px; color: var(--pink);">Due ${formatDateLong(e.dueDate)}</div>` : ''}
               </div>
               <div class="row-actions">
                 <button class="btn btn-sm" data-edit="${e.id}">Edit</button>
@@ -348,6 +370,10 @@ function renderDayDetail(dateStr) {
                 <option value="quiz">Quiz</option>
                 <option value="test">Test</option>
               </select>
+            </div>
+            <div class="field">
+              <label for="day-event-due">Due date (optional)</label>
+              <input type="date" id="day-event-due">
             </div>
           </div>
           <div class="field">
@@ -394,10 +420,13 @@ function renderDayDetail(dateStr) {
       if (title === null) return;
       const notes = prompt('Notes', ev.notes || '');
       if (notes === null) return;
-      const res = await apiPost({ action: 'editEvent', id: ev.id, title, notes });
+      const dueDate = prompt('Due date (YYYY-MM-DD, leave blank for none)', ev.dueDate || '');
+      if (dueDate === null) return;
+      if (dueDate && !/^\d{4}-\d{2}-\d{2}$/.test(dueDate)) { alert('Due date must be in YYYY-MM-DD format.'); return; }
+      const res = await apiPost({ action: 'editEvent', id: ev.id, title, notes, dueDate });
       if (res.error) { alert(res.error); return; }
       currentEvents.forEach(e => {
-        if (e.linkId === ev.linkId) { e.title = title; e.notes = notes; }
+        if (e.linkId === ev.linkId) { e.title = title; e.notes = notes; e.dueDate = dueDate || null; }
       });
       renderCalendar();
       renderDayDetail(dateStr);
@@ -411,10 +440,11 @@ function renderDayDetail(dateStr) {
       const type = document.getElementById('day-event-type').value;
       const title = document.getElementById('day-event-title').value.trim();
       const notes = document.getElementById('day-event-notes').value.trim();
+      const dueDate = document.getElementById('day-event-due').value;
       const alertEl = document.getElementById('day-event-alert');
       setAlert(alertEl, 'info', 'Saving…');
 
-      const res = await apiPost({ action: 'addEvent', slotId: selectedSlot.id, date: dateStr, type, title, notes });
+      const res = await apiPost({ action: 'addEvent', slotId: selectedSlot.id, date: dateStr, dueDate, type, title, notes });
       if (res.error) {
         setAlert(alertEl, 'error', res.error);
         return;

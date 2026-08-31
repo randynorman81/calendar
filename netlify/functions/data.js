@@ -159,7 +159,7 @@ async function publicEvents(slotId) {
   const forSlot = events
     .filter((e) => e.slotId === slotId)
     .sort((a, b) => a.date.localeCompare(b.date))
-    .map((e) => ({ id: e.id, slotId: e.slotId, linkId: e.linkId, date: e.date, title: e.title, notes: e.notes || "", type: e.type, synced: linkCounts[e.linkId] > 1 }));
+    .map((e) => ({ id: e.id, slotId: e.slotId, linkId: e.linkId, date: e.date, dueDate: e.dueDate || null, title: e.title, notes: e.notes || "", type: e.type, synced: linkCounts[e.linkId] > 1 }));
   return { ok: true, slot: { id: slot.id, label: slot.label, course: slot.course }, events: forSlot };
 }
 
@@ -171,6 +171,7 @@ async function adminEvents() {
 async function addEvent(body) {
   const slotId = (body.slotId || "").trim();
   const date = (body.date || "").trim();
+  const dueDate = (body.dueDate || "").trim();
   const title = (body.title || "").trim();
   const notes = (body.notes || "").trim();
   const type = body.type === "quiz" || body.type === "test" ? body.type : "assignment";
@@ -179,6 +180,10 @@ async function addEvent(body) {
   if (!slot) return { error: "Unknown period" };
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return { error: "Invalid date" };
   if (!title) return { error: "Title is required" };
+  // Unlike `date` (the day the class covers/assigns this -- must be a day
+  // that slot actually meets), `dueDate` is just the deadline and can land
+  // on any day at all, including a day this slot doesn't meet.
+  if (dueDate && !/^\d{4}-\d{2}-\d{2}$/.test(dueDate)) return { error: "Invalid due date" };
 
   const fridayTypes = await readJSON("fridayTypes", {});
   if (!slotMeetsOnDate(slot, date, fridayTypes)) {
@@ -193,7 +198,7 @@ async function addEvent(body) {
     created = [];
     const linkId = newId();
 
-    const primary = { id: newId(), slotId, date, title, notes, type, linkId, timestamp: new Date().toISOString() };
+    const primary = { id: newId(), slotId, date, dueDate: dueDate || null, title, notes, type, linkId, timestamp: new Date().toISOString() };
     events.push(primary);
     created.push(primary);
 
@@ -201,7 +206,9 @@ async function addEvent(body) {
       const partnerSlot = slotById(rule.to);
       const partnerDate = rule.mode === "same-day" ? date : nextMeetingDate(partnerSlot, date, fridayTypes);
       if (partnerDate) {
-        const mirrored = { id: newId(), slotId: rule.to, date: partnerDate, title, notes, type, linkId, timestamp: new Date().toISOString() };
+        // The due date is the actual deadline -- everyone synced to this
+        // assignment shares it exactly, it doesn't shift like `date` does.
+        const mirrored = { id: newId(), slotId: rule.to, date: partnerDate, dueDate: dueDate || null, title, notes, type, linkId, timestamp: new Date().toISOString() };
         events.push(mirrored);
         created.push(mirrored);
       }
@@ -217,14 +224,17 @@ async function editEvent(body) {
   const id = body.id;
   const title = (body.title || "").trim();
   const notes = (body.notes || "").trim();
+  const dueDate = (body.dueDate || "").trim();
   if (!title) return { error: "Title is required" };
+  if (dueDate && !/^\d{4}-\d{2}-\d{2}$/.test(dueDate)) return { error: "Invalid due date" };
 
   const target = await findEventWithRetry(id);
   if (!target) return { error: "Event not found" };
 
-  // Title/notes cascade to every event sharing the same linkId, so synced
-  // pairs never drift out of sync. The date isn't editable here -- delete
-  // and re-add if the date needs to change, so sync partners stay correct.
+  // Title/notes/due date cascade to every event sharing the same linkId, so
+  // synced pairs never drift out of sync. The `date` (assigned day) isn't
+  // editable here -- delete and re-add if that needs to change, so sync
+  // partners stay correct.
   let count = 0;
   await updateJSON("events", [], (events) => {
     count = 0;
@@ -232,6 +242,7 @@ async function editEvent(body) {
       if (e.linkId === target.linkId) {
         e.title = title;
         e.notes = notes;
+        e.dueDate = dueDate || null;
         count++;
       }
     });
