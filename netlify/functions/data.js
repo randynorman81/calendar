@@ -174,7 +174,7 @@ async function addEvent(body) {
   const dueDate = (body.dueDate || "").trim();
   const title = (body.title || "").trim();
   const notes = (body.notes || "").trim();
-  const type = body.type === "quiz" || body.type === "test" ? body.type : "assignment";
+  const type = ["quiz", "test", "note"].includes(body.type) ? body.type : "assignment";
 
   const slot = slotById(slotId);
   if (!slot) return { error: "Unknown period" };

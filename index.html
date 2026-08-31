@@ -62,6 +62,7 @@
       <span><span class="type-dot event-dot-assignment"></span> Assignment</span>
       <span><span class="type-dot event-dot-quiz"></span> Quiz</span>
       <span><span class="type-dot event-dot-test"></span> Test</span>
+      <span><span class="type-dot event-dot-note"></span> Note</span>
       <span><span class="type-dot event-dot-due"></span> Due Date</span>
     </div>
     <div class="calendar-header">
@@ -101,7 +102,7 @@ function setAlert(el, kind, msg) {
 
 const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 const MONTH_NAMES = ["January","February","March","April","May","June","July","August","September","October","November","December"];
-const TYPE_LABEL = { quiz: 'Quiz', test: 'Test', assignment: 'Assignment' };
+const TYPE_LABEL = { quiz: 'Quiz', test: 'Test', assignment: 'Assignment', note: 'Note' };
 
 function pad2(n) { return String(n).padStart(2, '0'); }
 function toDateStr(y, m, d) { return `${y}-${pad2(m + 1)}-${pad2(d)}`; }
@@ -369,6 +370,7 @@ function renderDayDetail(dateStr) {
                 <option value="assignment">Assignment</option>
                 <option value="quiz">Quiz</option>
                 <option value="test">Test</option>
+                <option value="note">Note</option>
               </select>
             </div>
             <div class="field">
